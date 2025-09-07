@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CORS Test - Admin Panel</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 600px; margin: 0 auto; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input, button { padding: 8px; width: 100%; box-sizing: border-box; }
+        button { background-color: #007bff; color: white; border: none; cursor: pointer; }
+        button:hover { background-color: #0056b3; }
+        .result { margin-top: 20px; padding: 10px; border-radius: 4px; }
+        .success { background-color: #d4edda; border: 1px solid #c3e6cb; color: #155724; }
+        .error { background-color: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }
+        .info { background-color: #d1ecf1; border: 1px solid #bee5eb; color: #0c5460; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>CORS Test - Admin Panel Login</h1>
+        <p class="info">
+            <strong>Current Origin:</strong> <span id="currentOrigin"></span><br>
+            <strong>Test Status:</strong> This page tests CORS for admin endpoints (ports 4000-4020)
+        </p>
+        
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="email">Email:</label>
+                <input type="email" id="email" value="admin@paniq.co.za" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="password">Password:</label>
+                <input type="password" id="password" value="zRW4uctH^xX29Hc8" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="userType">User Type:</label>
+                <select id="userType">
+                    <option value="firm_personnel">Firm Personnel</option>
+                    <option value="registered_user">Registered User</option>
+                </select>
+            </div>
+            
+            <button type="submit">Test Login</button>
+        </form>
+        
+        <div id="result"></div>
+        
+        <h2>Test Different Endpoints</h2>
+        <button onclick="testMe()">Test /me Endpoint</button>
+        <button onclick="testUsers()">Test /users Endpoint (Regular)</button>
+        
+        <h2>CORS Information</h2>
+        <p>
+            <strong>Allowed Admin Origins:</strong> http://localhost:4000 - http://localhost:4020<br>
+            <strong>Allowed Regular Origins:</strong> http://localhost:3000<br>
+            <strong>Admin Endpoints:</strong> /api/v1/auth/*, /api/v1/admin/*, /api/v1/security-firms/*, etc.
+        </p>
+    </div>
+
+    <script>
+        // Display current origin
+        document.getElementById('currentOrigin').textContent = window.location.origin;
+        
+        let currentToken = null;
+        
+        // Login form handler
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const userType = document.getElementById('userType').value;
+            
+            try {
+                const response = await fetch('http://localhost:8000/api/v1/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    credentials: 'include',
+                    body: JSON.stringify({
+                        email: email,
+                        password: password,
+                        user_type: userType
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    currentToken = data.access_token;
+                    showResult('success', `Login successful! Welcome ${data.first_name} ${data.last_name} (${data.role})`);
+                } else {
+                    const error = await response.json();
+                    showResult('error', `Login failed: ${error.detail || 'Unknown error'}`);
+                }
+            } catch (error) {
+                showResult('error', `CORS or Network Error: ${error.message}`);
+            }
+        });
+        
+        // Test /me endpoint
+        async function testMe() {
+            if (!currentToken) {
+                showResult('error', 'Please login first to get a token');
+                return;
+            }
+            
+            try {
+                const response = await fetch('http://localhost:8000/api/v1/auth/me', {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${currentToken}`,
+                    },
+                    credentials: 'include'
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    showResult('success', `Me endpoint successful! User: ${data.first_name} ${data.last_name}, Firm: ${data.firm_name}`);
+                } else {
+                    const error = await response.json();
+                    showResult('error', `Me endpoint failed: ${error.detail || 'Unknown error'}`);
+                }
+            } catch (error) {
+                showResult('error', `CORS or Network Error: ${error.message}`);
+            }
+        }
+        
+        // Test /users endpoint (regular endpoint)
+        async function testUsers() {
+            try {
+                const response = await fetch('http://localhost:8000/api/v1/users', {
+                    method: 'GET',
+                    credentials: 'include'
+                });
+                
+                if (response.ok) {
+                    showResult('success', 'Users endpoint accessible (this should work from port 3000 only)');
+                } else {
+                    showResult('error', `Users endpoint failed: ${response.status} ${response.statusText}`);
+                }
+            } catch (error) {
+                showResult('error', `CORS or Network Error: ${error.message}`);
+            }
+        }
+        
+        function showResult(type, message) {
+            const resultDiv = document.getElementById('result');
+            resultDiv.className = `result ${type}`;
+            resultDiv.innerHTML = `<strong>${type.toUpperCase()}:</strong> ${message}`;
+        }
+    </script>
+</body>
+</html>

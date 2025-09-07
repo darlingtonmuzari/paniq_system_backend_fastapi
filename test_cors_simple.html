@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CORS Test for Security Firms</title>
+</head>
+<body>
+    <h1>CORS Test for Port 4010 - Security Firms</h1>
+    
+    <div id="origin-info"></div>
+    
+    <h2>Test 1: Document Types (GET)</h2>
+    <button onclick="testDocumentTypes()">Test Document Types</button>
+    <div id="result1"></div>
+    
+    <h2>Test 2: Security Firm Registration (POST)</h2>
+    <button onclick="testSecurityFirmRegistration()">Test Security Firm Registration</button>
+    <div id="result2"></div>
+    
+    <h2>Test 3: OPTIONS Preflight</h2>
+    <button onclick="testPreflight()">Test Preflight Request</button>
+    <div id="result3"></div>
+
+    <script>
+        // Show current origin
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('origin-info').innerHTML = 
+                `<p><strong>Current Origin:</strong> ${window.location.origin}</p>
+                 <p><strong>Expected:</strong> http://localhost:4010</p>`;
+        });
+
+        async function testDocumentTypes() {
+            const resultDiv = document.getElementById('result1');
+            resultDiv.innerHTML = 'Testing GET request...';
+            
+            try {
+                const response = await fetch('http://localhost:8000/api/v1/document-types/all', {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const text = await response.text();
+                resultDiv.innerHTML = `
+                    <p><strong>Status:</strong> ${response.status}</p>
+                    <p><strong>CORS Headers:</strong> ${response.headers.get('access-control-allow-origin') || 'None'}</p>
+                    <p><strong>Response:</strong> ${text.substring(0, 200)}...</p>
+                `;
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <p><strong>Error:</strong> ${error.message}</p>
+                    <p style="color: red;">This indicates a CORS issue.</p>
+                `;
+            }
+        }
+
+        async function testSecurityFirmRegistration() {
+            const resultDiv = document.getElementById('result2');
+            resultDiv.innerHTML = 'Testing POST request...';
+            
+            const testData = {
+                name: "Test Security Firm",
+                registration_number: "TEST001",
+                email: "test@test.com",
+                phone: "+27123456789",
+                address: "123 Test Street",
+                province: "Gauteng"
+            };
+            
+            try {
+                const response = await fetch('http://localhost:8000/api/v1/security-firms/register', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(testData)
+                });
+                
+                const text = await response.text();
+                resultDiv.innerHTML = `
+                    <p><strong>Status:</strong> ${response.status}</p>
+                    <p><strong>CORS Headers:</strong> ${response.headers.get('access-control-allow-origin') || 'None'}</p>
+                    <p><strong>Response:</strong> ${text}</p>
+                    <p><strong>Note:</strong> 401 is expected (no auth token), but CORS should work</p>
+                `;
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <p><strong>Error:</strong> ${error.message}</p>
+                    <p style="color: red;">This indicates a CORS issue.</p>
+                `;
+            }
+        }
+
+        async function testPreflight() {
+            const resultDiv = document.getElementById('result3');
+            resultDiv.innerHTML = 'Testing OPTIONS preflight...';
+            
+            try {
+                const response = await fetch('http://localhost:8000/api/v1/security-firms/register', {
+                    method: 'OPTIONS',
+                    headers: {
+                        'Origin': window.location.origin,
+                        'Access-Control-Request-Method': 'POST',
+                        'Access-Control-Request-Headers': 'Content-Type,Authorization'
+                    }
+                });
+                
+                resultDiv.innerHTML = `
+                    <p><strong>Status:</strong> ${response.status}</p>
+                    <p><strong>Allow-Origin:</strong> ${response.headers.get('access-control-allow-origin') || 'None'}</p>
+                    <p><strong>Allow-Methods:</strong> ${response.headers.get('access-control-allow-methods') || 'None'}</p>
+                    <p><strong>Allow-Headers:</strong> ${response.headers.get('access-control-allow-headers') || 'None'}</p>
+                `;
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <p><strong>Error:</strong> ${error.message}</p>
+                    <p style="color: red;">Preflight failed - CORS issue.</p>
+                `;
+            }
+        }
+    </script>
+    
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        button { padding: 10px 20px; margin: 10px 0; }
+        div[id^="result"] { 
+            border: 1px solid #ccc; 
+            padding: 10px; 
+            margin: 10px 0; 
+            background: #f9f9f9; 
+        }
+    </style>
+</body>
+</html>

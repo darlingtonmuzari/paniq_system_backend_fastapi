@@ -1,0 +1,216 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Panic System Platform - Business Metrics",
+    "tags": ["panic-system", "business"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Panic Requests Over Time",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(panic_requests_total[5m])",
+            "legendFormat": "{{service_type}} - {{status}}"
+          }
+        ],
+        "yAxes": [
+          {
+            "unit": "reqps"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 24,
+          "x": 0,
+          "y": 0
+        }
+      },
+      {
+        "id": 2,
+        "title": "Average Response Time by Service Type",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(panic_request_response_time_seconds_bucket[5m]))",
+            "legendFormat": "95th percentile - {{service_type}}"
+          },
+          {
+            "expr": "histogram_quantile(0.50, rate(panic_request_response_time_seconds_bucket[5m]))",
+            "legendFormat": "50th percentile - {{service_type}}"
+          }
+        ],
+        "yAxes": [
+          {
+            "unit": "s"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 8
+        }
+      },
+      {
+        "id": 3,
+        "title": "Completion Time by Service Type",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(panic_request_completion_time_seconds_bucket[5m]))",
+            "legendFormat": "95th percentile - {{service_type}}"
+          },
+          {
+            "expr": "histogram_quantile(0.50, rate(panic_request_completion_time_seconds_bucket[5m]))",
+            "legendFormat": "50th percentile - {{service_type}}"
+          }
+        ],
+        "yAxes": [
+          {
+            "unit": "s"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 8
+        }
+      },
+      {
+        "id": 4,
+        "title": "Zone Performance Heatmap",
+        "type": "heatmap",
+        "targets": [
+          {
+            "expr": "zone_average_response_time_seconds",
+            "legendFormat": "{{zone_id}} - {{service_type}}"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 16
+        }
+      },
+      {
+        "id": 5,
+        "title": "Firm Performance",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "firm_average_response_time_seconds",
+            "legendFormat": "{{firm_id}} - {{service_type}}"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 16
+        }
+      },
+      {
+        "id": 6,
+        "title": "Subscription Metrics",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sum(active_subscriptions_total)",
+            "legendFormat": "Total Active Subscriptions"
+          },
+          {
+            "expr": "rate(subscription_purchases_total[1h])",
+            "legendFormat": "Purchases per Hour"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        },
+        "gridPos": {
+          "h": 4,
+          "w": 12,
+          "x": 0,
+          "y": 24
+        }
+      },
+      {
+        "id": 7,
+        "title": "Prank Detection",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rate(prank_flags_total[1h])",
+            "legendFormat": "Prank Flags per Hour"
+          },
+          {
+            "expr": "rate(user_fines_total[1h])",
+            "legendFormat": "Fines Issued per Hour"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 1
+                },
+                {
+                  "color": "red",
+                  "value": 5
+                }
+              ]
+            }
+          }
+        },
+        "gridPos": {
+          "h": 4,
+          "w": 12,
+          "x": 12,
+          "y": 24
+        }
+      },
+      {
+        "id": 8,
+        "title": "Credit Transactions",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(credit_transactions_total[5m])",
+            "legendFormat": "{{transaction_type}} - {{firm_id}}"
+          }
+        ],
+        "yAxes": [
+          {
+            "unit": "reqps"
+          }
+        ],
+        "gridPos": {
+          "h": 6,
+          "w": 24,
+          "x": 0,
+          "y": 28
+        }
+      }
+    ],
+    "time": {
+      "from": "now-6h",
+      "to": "now"
+    },
+    "refresh": "1m"
+  }
+}

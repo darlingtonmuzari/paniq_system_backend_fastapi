@@ -1,0 +1,212 @@
+groups:
+  - name: panic_system_alerts
+    rules:
+      # System Health Alerts
+      - alert: HighErrorRate
+        expr: rate(http_requests_total{status_code=~"5.."}[5m]) / rate(http_requests_total[5m]) * 100 > 5
+        for: 2m
+        labels:
+          severity: critical
+          service: panic-system
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is {{ $value }}% for endpoint {{ $labels.endpoint }}"
+
+      - alert: HighResponseTime
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+          service: panic-system
+        annotations:
+          summary: "High response time detected"
+          description: "95th percentile response time is {{ $value }}s for {{ $labels.endpoint }}"
+
+      - alert: DatabaseConnectionsHigh
+        expr: database_connections_active > 80
+        for: 2m
+        labels:
+          severity: warning
+          service: panic-system
+        annotations:
+          summary: "High database connection usage"
+          description: "Database connections are at {{ $value }}, approaching limit"
+
+      - alert: CacheLowHitRate
+        expr: cache_hit_rate < 70
+        for: 5m
+        labels:
+          severity: warning
+          service: panic-system
+        annotations:
+          summary: "Low cache hit rate"
+          description: "Cache hit rate is {{ $value }}% for {{ $labels.cache_type }}"
+
+      # Authentication Alerts
+      - alert: HighFailedLoginRate
+        expr: rate(failed_login_attempts_total[5m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+          service: panic-system
+        annotations:
+          summary: "High failed login rate"
+          description: "Failed login rate is {{ $value }}/sec for {{ $labels.user_type }}"
+
+      - alert: ManyAccountLockouts
+        expr: rate(account_lockouts_total[10m]) > 5
+        for: 1m
+        labels:
+          severity: critical
+          service: panic-system
+        annotations:
+          summary: "Many account lockouts detected"
+          description: "Account lockout rate is {{ $value }}/10min for {{ $labels.user_type }}"
+
+      # Business Logic Alerts
+      - alert: SlowPanicResponse
+        expr: histogram_quantile(0.95, rate(panic_request_response_time_seconds_bucket[10m])) > 300
+        for: 5m
+        labels:
+          severity: critical
+          service: panic-system
+        annotations:
+          summary: "Slow panic request response time"
+          description: "95th percentile response time is {{ $value }}s for {{ $labels.service_type }} in {{ $labels.zone }}"
+
+      - alert: VerySlowPanicResponse
+        expr: histogram_quantile(0.95, rate(panic_request_response_time_seconds_bucket[10m])) > 600
+        for: 2m
+        labels:
+          severity: critical
+          service: panic-system
+        annotations:
+          summary: "Very slow panic request response time"
+          description: "95th percentile response time is {{ $value }}s for {{ $labels.service_type }} in {{ $labels.zone }}"
+
+      - alert: HighPrankRate
+        expr: rate(prank_flags_total[1h]) / rate(panic_requests_total[1h]) * 100 > 20
+        for: 10m
+        labels:
+          severity: warning
+          service: panic-system
+        annotations:
+          summary: "High prank request rate"
+          description: "Prank rate is {{ $value }}% in the last hour"
+
+      - alert: NoRecentPanicRequests
+        expr: rate(panic_requests_total[30m]) == 0
+        for: 30m
+        labels:
+          severity: warning
+          service: panic-system
+        annotations:
+          summary: "No panic requests received"
+          description: "No panic requests have been received in the last 30 minutes"
+
+      # Subscription and Business Alerts
+      - alert: LowActiveSubscriptions
+        expr: sum(active_subscriptions_total) < 10
+        for: 10m
+        labels:
+          severity: warning
+          service: panic-system
+        annotations:
+          summary: "Low active subscriptions"
+          description: "Only {{ $value }} active subscriptions remaining"
+
+      - alert: HighCreditTransactionFailures
+        expr: rate(credit_transactions_total{transaction_type="failed"}[5m]) > 1
+        for: 2m
+        labels:
+          severity: warning
+          service: panic-system
+        annotations:
+          summary: "High credit transaction failure rate"
+          description: "Credit transaction failure rate is {{ $value }}/sec"
+
+      # Notification Alerts
+      - alert: NotificationDeliveryFailures
+        expr: rate(notifications_sent_total{status="failed"}[5m]) / rate(notifications_sent_total[5m]) * 100 > 10
+        for: 5m
+        labels:
+          severity: warning
+          service: panic-system
+        annotations:
+          summary: "High notification delivery failure rate"
+          description: "Notification failure rate is {{ $value }}% for {{ $labels.type }}"
+
+      # WebSocket Connection Alerts
+      - alert: WebSocketConnectionsHigh
+        expr: websocket_connections_active > 1000
+        for: 5m
+        labels:
+          severity: warning
+          service: panic-system
+        annotations:
+          summary: "High WebSocket connection count"
+          description: "WebSocket connections are at {{ $value }} for {{ $labels.connection_type }}"
+
+      # Zone Performance Alerts
+      - alert: ZonePerformanceDegraded
+        expr: zone_average_response_time_seconds > 300
+        for: 10m
+        labels:
+          severity: warning
+          service: panic-system
+        annotations:
+          summary: "Zone performance degraded"
+          description: "Average response time is {{ $value }}s for {{ $labels.service_type }} in zone {{ $labels.zone_id }}"
+
+      - alert: FirmPerformanceDegraded
+        expr: firm_average_response_time_seconds > 300
+        for: 10m
+        labels:
+          severity: warning
+          service: panic-system
+        annotations:
+          summary: "Firm performance degraded"
+          description: "Average response time is {{ $value }}s for {{ $labels.service_type }} by firm {{ $labels.firm_id }}"
+
+  - name: panic_system_critical
+    rules:
+      # Critical system failures
+      - alert: ServiceDown
+        expr: up{job="panic-system"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: panic-system
+        annotations:
+          summary: "Panic System service is down"
+          description: "The Panic System service has been down for more than 1 minute"
+
+      - alert: DatabaseDown
+        expr: database_connections_active == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: panic-system
+        annotations:
+          summary: "Database connection lost"
+          description: "No active database connections detected"
+
+      - alert: RedisDown
+        expr: redis_connections_active == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: panic-system
+        annotations:
+          summary: "Redis connection lost"
+          description: "No active Redis connections detected"
+
+      - alert: CriticalPanicResponseTime
+        expr: histogram_quantile(0.95, rate(panic_request_response_time_seconds_bucket[5m])) > 900
+        for: 1m
+        labels:
+          severity: critical
+          service: panic-system
+        annotations:
+          summary: "Critical panic response time"
+          description: "95th percentile response time is {{ $value }}s - exceeding 15 minutes"

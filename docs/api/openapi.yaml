@@ -1,0 +1,495 @@
+openapi: 3.0.3
+info:
+  title: Panic System Platform API
+  description: |
+    Emergency response platform connecting security firms, emergency service providers, and end users.
+    
+    ## Authentication
+    
+    The API uses JWT tokens for authentication with mobile app attestation for enhanced security.
+    All mobile endpoints require valid app attestation tokens.
+    
+    ## Rate Limiting
+    
+    API endpoints are rate-limited to prevent abuse:
+    - Authentication: 10 requests per minute
+    - Emergency Requests: 5 requests per minute  
+    - General API: 100 requests per minute
+    
+    ## Error Handling
+    
+    All errors follow a consistent format with error codes, messages, and contextual details.
+    See the Error Codes documentation for complete reference.
+    
+  version: 1.0.0
+  contact:
+    name: Panic System Platform Support
+    email: support@panicsystem.com
+    url: https://panicsystem.com/support
+  license:
+    name: Proprietary
+    url: https://panicsystem.com/license
+  termsOfService: https://panicsystem.com/terms
+
+servers:
+  - url: https://api.panicsystem.com/api/v1
+    description: Production server
+  - url: https://staging-api.panicsystem.com/api/v1
+    description: Staging server
+
+security:
+  - BearerAuth: []
+  - MobileAttestation: []
+
+paths:
+  /auth/login:
+    post:
+      tags:
+        - authentication
+      summary: Authenticate user and return JWT tokens
+      description: |
+        Authenticate users (registered users or firm personnel) and return access and refresh tokens.
+        Includes account protection with automatic lockout after 5 failed attempts.
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            examples:
+              registered_user:
+                summary: Registered user login
+                value:
+                  email: user@example.com
+                  password: securepassword
+                  user_type: registered_user
+              firm_personnel:
+                summary: Firm personnel login
+                value:
+                  email: agent@securityfirm.com
+                  password: securepassword
+                  user_type: firm_personnel
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+              examples:
+                invalid_credentials:
+                  value:
+                    error_code: AUTH_010
+                    message: Invalid email or password
+                    details:
+                      remaining_attempts: 3
+                    timestamp: "2024-08-24T10:30:00Z"
+                    request_id: req_123456789
+        '423':
+          description: Account locked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+              examples:
+                account_locked:
+                  value:
+                    error_code: AUTH_004
+                    message: Account is temporarily locked
+                    details:
+                      retry_after_minutes: 30
+                    timestamp: "2024-08-24T10:30:00Z"
+                    request_id: req_123456789
+
+  /auth/refresh:
+    post:
+      tags:
+        - authentication
+      summary: Refresh access token
+      description: Obtain a new access token using a valid refresh token
+      operationId: refreshToken
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+      responses:
+        '200':
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          description: Invalid or expired refresh token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+
+  /auth/me:
+    get:
+      tags:
+        - authentication
+      summary: Get current user information
+      description: Returns information about the currently authenticated user
+      operationId: getCurrentUser
+      responses:
+        '200':
+          description: User information retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserInfoResponse'
+        '401':
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+
+  /emergency/request:
+    post:
+      tags:
+        - emergency
+      summary: Submit emergency request
+      description: |
+        Submit a panic request for emergency services. Requires valid subscription and location within coverage area.
+        For call service type, automatically sets phone to silent mode.
+      operationId: submitEmergencyRequest
+      security:
+        - BearerAuth: []
+        - MobileAttestation: []
+      parameters:
+        - $ref: '#/components/parameters/X-Platform'
+        - $ref: '#/components/parameters/X-Attestation-Token'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmergencyRequest'
+            examples:
+              security_request:
+                summary: Security emergency
+                value:
+                  service_type: security
+                  location:
+                    latitude: 40.7128
+                    longitude: -74.0060
+                  address: "123 Main St, New York, NY"
+                  description: "Suspicious activity outside my home"
+                  group_id: "123e4567-e89b-12d3-a456-426614174000"
+              call_request:
+                summary: Call service (silent mode)
+                value:
+                  service_type: call
+                  location:
+                    latitude: 40.7128
+                    longitude: -74.0060
+                  address: "123 Main St, New York, NY"
+                  description: "Need immediate assistance"
+                  group_id: "123e4567-e89b-12d3-a456-426614174000"
+      responses:
+        '201':
+          description: Emergency request submitted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmergencyRequestResponse'
+        '400':
+          description: Invalid request or location not covered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+              examples:
+                location_not_covered:
+                  value:
+                    error_code: GEO_001
+                    message: Location is outside service coverage area
+                    details:
+                      suggested_firms: ["SecureCorp", "SafeGuard Inc"]
+                    timestamp: "2024-08-24T10:30:00Z"
+                    request_id: req_123456789
+        '403':
+          description: Subscription expired or insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT access token obtained from login endpoint
+    MobileAttestation:
+      type: apiKey
+      in: header
+      name: X-Attestation-Token
+      description: Mobile app attestation token (Google Play Integrity or Apple App Attest)
+
+  parameters:
+    X-Platform:
+      name: X-Platform
+      in: header
+      required: true
+      schema:
+        type: string
+        enum: [android, ios]
+      description: Mobile platform identifier
+    X-Attestation-Token:
+      name: X-Attestation-Token
+      in: header
+      required: true
+      schema:
+        type: string
+      description: Mobile app attestation token
+
+  schemas:
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+        - user_type
+      properties:
+        email:
+          type: string
+          format: email
+          description: User email address
+          example: user@example.com
+        password:
+          type: string
+          minLength: 8
+          description: User password
+          example: securepassword
+        user_type:
+          type: string
+          enum: [registered_user, firm_personnel]
+          description: Type of user logging in
+          example: registered_user
+
+    TokenResponse:
+      type: object
+      required:
+        - access_token
+        - refresh_token
+        - token_type
+        - expires_in
+      properties:
+        access_token:
+          type: string
+          description: JWT access token
+          example: eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...
+        refresh_token:
+          type: string
+          description: JWT refresh token
+          example: eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...
+        token_type:
+          type: string
+          enum: [Bearer]
+          description: Token type
+          example: Bearer
+        expires_in:
+          type: integer
+          description: Access token expiry time in seconds
+          example: 3600
+
+    RefreshTokenRequest:
+      type: object
+      required:
+        - refresh_token
+      properties:
+        refresh_token:
+          type: string
+          description: Valid refresh token
+          example: eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...
+
+    UserInfoResponse:
+      type: object
+      required:
+        - user_id
+        - email
+        - user_type
+        - permissions
+      properties:
+        user_id:
+          type: string
+          format: uuid
+          description: User identifier
+          example: 123e4567-e89b-12d3-a456-426614174000
+        email:
+          type: string
+          format: email
+          description: User email
+          example: user@example.com
+        user_type:
+          type: string
+          enum: [registered_user, firm_personnel]
+          description: Type of user
+          example: registered_user
+        permissions:
+          type: array
+          items:
+            type: string
+          description: User permissions
+          example: ["read:profile", "write:groups"]
+        firm_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Firm ID for personnel
+          example: 456e7890-e89b-12d3-a456-426614174000
+        role:
+          type: string
+          enum: [field_agent, team_leader, office_staff]
+          nullable: true
+          description: Role for personnel
+          example: field_agent
+
+    Location:
+      type: object
+      required:
+        - latitude
+        - longitude
+      properties:
+        latitude:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+          description: GPS latitude coordinate
+          example: 40.7128
+        longitude:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+          description: GPS longitude coordinate
+          example: -74.0060
+
+    EmergencyRequest:
+      type: object
+      required:
+        - service_type
+        - location
+        - address
+        - group_id
+      properties:
+        service_type:
+          type: string
+          enum: [call, security, ambulance, fire, towing]
+          description: Type of emergency service requested
+          example: security
+        location:
+          $ref: '#/components/schemas/Location'
+        address:
+          type: string
+          maxLength: 500
+          description: Human-readable address
+          example: "123 Main St, New York, NY"
+        description:
+          type: string
+          maxLength: 1000
+          description: Optional description of the emergency
+          example: "Suspicious activity outside my home"
+        group_id:
+          type: string
+          format: uuid
+          description: User group ID with valid subscription
+          example: 123e4567-e89b-12d3-a456-426614174000
+
+    EmergencyRequestResponse:
+      type: object
+      required:
+        - request_id
+        - status
+        - created_at
+      properties:
+        request_id:
+          type: string
+          description: Unique request identifier
+          example: req_123456789
+        status:
+          type: string
+          enum: [pending, assigned, in_progress, completed, cancelled]
+          description: Current request status
+          example: pending
+        estimated_response_time:
+          type: integer
+          nullable: true
+          description: Estimated response time in minutes
+          example: 15
+        assigned_team:
+          type: object
+          nullable: true
+          description: Assigned team information (if available)
+        created_at:
+          type: string
+          format: date-time
+          description: Request creation timestamp
+          example: "2024-08-24T10:30:00Z"
+
+    APIError:
+      type: object
+      required:
+        - error_code
+        - message
+        - timestamp
+        - request_id
+      properties:
+        error_code:
+          type: string
+          description: Specific error code for programmatic handling
+          example: AUTH_001
+        message:
+          type: string
+          description: Human-readable error message
+          example: Invalid attestation token
+        details:
+          type: object
+          nullable: true
+          description: Additional error context
+          example:
+            platform: android
+            token_status: expired
+        timestamp:
+          type: string
+          format: date-time
+          description: Error occurrence timestamp
+          example: "2024-08-24T10:30:00Z"
+        request_id:
+          type: string
+          description: Unique request identifier for debugging
+          example: req_123456789
+
+tags:
+  - name: authentication
+    description: User authentication and token management
+  - name: emergency
+    description: Emergency request processing and coordination
+  - name: users
+    description: User management and profiles
+  - name: subscriptions
+    description: Subscription management and purchases
+  - name: websocket
+    description: Real-time communication and updates
