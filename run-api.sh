@@ -14,9 +14,9 @@ fi
 mkdir -p logs uploads
 
 # Start the API with hot reload
-echo "🔥 Starting with hot reload on http://localhost:8000"
-echo "📚 API docs available at http://localhost:8000/docs"
+echo "🔥 Starting with hot reload on http://localhost:8010"
+echo "📚 API docs available at http://localhost:8010/docs"
 echo "🛑 Press Ctrl+C to stop"
 echo ""
 
-python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8010 --reload

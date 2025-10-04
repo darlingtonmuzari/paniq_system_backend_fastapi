@@ -246,7 +246,7 @@ async def login(
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh_token(request: RefreshTokenRequest):
+async def refresh_token(request: RefreshTokenRequest, db: AsyncSession = Depends(get_db)):
     """
     Refresh access token using refresh token
     
@@ -254,8 +254,8 @@ async def refresh_token(request: RefreshTokenRequest):
     using a valid refresh token without re-authentication.
     """
     try:
-        # Refresh token
-        token_pair = await auth_service.refresh_token(request.refresh_token)
+        # Refresh token with database session for current user data
+        token_pair = await auth_service.refresh_token(request.refresh_token, db)
         
         logger.info("token_refreshed")
         

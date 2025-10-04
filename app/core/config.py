@@ -11,10 +11,20 @@ class Settings(BaseSettings):
     """Application settings"""
     
     # Application
-    DEBUG: bool = False
+    DEBUG: bool = True
     SECRET_KEY: str = "your-secret-key-change-in-production"
-    ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:4010"]
-    ADMIN_ALLOWED_ORIGINS: List[str] = [f"http://localhost:{port}" for port in range(4000, 4021)]
+    ALLOWED_ORIGINS: List[str] = [
+        "http://localhost:8015",
+        "https://localhost:8015",
+        "http://127.0.0.1:8015", 
+        "https://127.0.0.1:8015"
+    ] + [f"http://localhost:{port}" for port in range(3000, 4000)] + [f"http://localhost:{port}" for port in range(8000, 8100)]
+    ADMIN_ALLOWED_ORIGINS: List[str] = [
+        "http://localhost:8015", 
+        "https://localhost:8015",
+        "http://127.0.0.1:8015",
+        "https://127.0.0.1:8015"
+    ] + [f"http://localhost:{port}" for port in range(4000, 4100)] + [f"http://localhost:{port}" for port in range(8000, 8100)]
     
     @field_validator('ALLOWED_ORIGINS', 'ADMIN_ALLOWED_ORIGINS', mode='before')
     @classmethod
@@ -25,7 +35,7 @@ class Settings(BaseSettings):
         return v
     
     # Database
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:password@localhost:5432/panic_system"
+    DATABASE_URL: str = "postgresql+asyncpg://manica_dev_admin:M1n931solutions*b0b5@postgresql-184662-0.cloudclusters.net:10024/panic_system_dev"
     DATABASE_POOL_SIZE: int = 20
     DATABASE_MAX_OVERFLOW: int = 30
     
@@ -39,7 +49,11 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     
-    # Mobile App Attestation
+    # Mobile App Attestation  
+    REQUIRE_MOBILE_ATTESTATION: bool = False  # Set to True in production
+    
+    # Metrics and Monitoring
+    METRICS_ENABLED: bool = True
     GOOGLE_PLAY_INTEGRITY_PACKAGE_NAME: str = "za.co.paniq"
     GOOGLE_PLAY_INTEGRITY_API_KEY: Optional[str] = None
     APPLE_APP_ATTEST_TEAM_ID: str = "YOUR_TEAM_ID"

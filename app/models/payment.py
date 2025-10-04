@@ -11,13 +11,17 @@ class CreditTier(BaseModel):
     """Credit pricing tier model"""
     __tablename__ = "credit_tiers"
     
+    name = Column(String(255), nullable=False, unique=True)
+    description = Column(Text, nullable=True)
     min_credits = Column(Integer, nullable=False)
     max_credits = Column(Integer, nullable=False)
     price = Column(DECIMAL(10, 2), nullable=False)
+    discount_percentage = Column(DECIMAL(5, 2), nullable=True, default=0.00)
     is_active = Column(Boolean, default=True, nullable=False)
+    sort_order = Column(Integer, nullable=True, default=0)
     
     def __repr__(self):
-        return f"<CreditTier {self.min_credits}-{self.max_credits} credits: R{self.price}>"
+        return f"<CreditTier {self.name}: {self.min_credits}-{self.max_credits} credits: R{self.price}>"
 
 
 class Invoice(BaseModel):

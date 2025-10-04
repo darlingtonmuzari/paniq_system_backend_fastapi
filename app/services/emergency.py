@@ -76,7 +76,7 @@ class EmergencyService:
         # but they may need to be adapted for async operations
         self.geolocation_service = GeolocationService(db)
         self.subscription_service = SubscriptionService(db)
-        self.metrics_service = MetricsService(db)
+        self.metrics_service = MetricsService()
     
     async def submit_panic_request(
         self,
@@ -122,7 +122,7 @@ class EmergencyService:
             )
         
         # 2. Validate request authorization (works even with locked accounts)
-        await self._validate_panic_request_authorization(requester_phone, group_id)
+        user_id = await self._validate_panic_request_authorization(requester_phone, group_id)
         
         # 3. Check for rate limiting
         await self._check_rate_limiting(requester_phone)
@@ -138,6 +138,7 @@ class EmergencyService:
         
         # 7. Create panic request
         panic_request = PanicRequest(
+            user_id=user_id,
             group_id=group_id,
             requester_phone=requester_phone,
             service_type=service_type,
@@ -239,7 +240,7 @@ class EmergencyService:
         self,
         requester_phone: str,
         group_id: UUID
-    ) -> bool:
+    ) -> UUID:
         """
         Validate that the phone number is authorized to make requests for this group
         This works even if the account is locked
@@ -249,29 +250,60 @@ class EmergencyService:
             group_id: User group ID
             
         Returns:
-            True if authorized
+            UUID of the authorized user
             
         Raises:
             UnauthorizedRequestError: If phone number is not authorized
         """
-        # Check if phone number belongs to the group
+        # First check if phone number belongs to any registered user and is a member of the group
+        from app.models.user import UserGroupMembership
+        
         result = await self.db.execute(
-            select(GroupMobileNumber).where(
+            select(RegisteredUser.id, UserGroup.id).
+            select_from(RegisteredUser).
+            join(UserGroupMembership, RegisteredUser.id == UserGroupMembership.user_id).
+            join(UserGroup, UserGroupMembership.group_id == UserGroup.id).
+            where(
                 and_(
-                    GroupMobileNumber.group_id == group_id,
-                    GroupMobileNumber.phone_number == requester_phone,
-                    GroupMobileNumber.is_verified == True
+                    RegisteredUser.phone == requester_phone,
+                    UserGroup.id == group_id,
+                    RegisteredUser.is_verified == True
                 )
             )
         )
         
-        group_member = result.scalar_one_or_none()
-        if not group_member:
-            raise UnauthorizedRequestError(
-                "Phone number is not authorized to make requests for this group"
+        user_group = result.first()
+        if not user_group:
+            # Fallback: Check if phone number belongs to the group (legacy method)
+            result = await self.db.execute(
+                select(GroupMobileNumber).where(
+                    and_(
+                        GroupMobileNumber.group_id == group_id,
+                        GroupMobileNumber.phone_number == requester_phone,
+                        GroupMobileNumber.is_verified == True
+                    )
+                )
             )
+            
+            group_member = result.scalar_one_or_none()
+            if not group_member:
+                raise UnauthorizedRequestError(
+                    "Phone number is not authorized to make requests for this group"
+                )
+            
+            # Find the user by phone number if group mobile number exists
+            result = await self.db.execute(
+                select(RegisteredUser.id).where(RegisteredUser.phone == requester_phone)
+            )
+            user = result.scalar_one_or_none()
+            if not user:
+                raise UnauthorizedRequestError(
+                    "Phone number not associated with any registered user"
+                )
+            
+            return user
         
-        return True
+        return user_group[0]
     
     async def _check_rate_limiting(self, requester_phone: str) -> bool:
         """
@@ -480,7 +512,8 @@ class EmergencyService:
         """
         result = await self.db.execute(
             select(PanicRequest).options(
-                selectinload(PanicRequest.group).selectinload(UserGroup.user),
+                selectinload(PanicRequest.user),
+                selectinload(PanicRequest.group),
                 selectinload(PanicRequest.assigned_team),
                 selectinload(PanicRequest.assigned_service_provider),
                 selectinload(PanicRequest.status_updates),
@@ -509,12 +542,17 @@ class EmergencyService:
         Returns:
             List of panic requests
         """
-        # Build query
+        # Build query - get requests from groups that the user is a member of
+        from app.models.user import UserGroupMembership
+        
         query = select(PanicRequest).options(
+            selectinload(PanicRequest.user),
             selectinload(PanicRequest.group),
             selectinload(PanicRequest.assigned_team),
             selectinload(PanicRequest.status_updates)
-        ).join(UserGroup).where(UserGroup.user_id == user_id)
+        ).join(UserGroup).join(
+            UserGroupMembership, UserGroup.id == UserGroupMembership.group_id
+        ).where(UserGroupMembership.user_id == user_id)
         
         if status_filter:
             query = query.where(PanicRequest.status == status_filter)
@@ -543,6 +581,8 @@ class EmergencyService:
         """
         result = await self.db.execute(
             select(PanicRequest).options(
+                selectinload(PanicRequest.user),
+                selectinload(PanicRequest.group),
                 selectinload(PanicRequest.status_updates),
                 selectinload(PanicRequest.assigned_team),
                 selectinload(PanicRequest.assigned_service_provider)
@@ -609,10 +649,16 @@ class EmergencyService:
         self.db.add(status_update)
         await self.db.commit()
         
-        # Record metrics for lifecycle events
-        await self.metrics_service.record_request_lifecycle_event(
-            request_id, new_status, now, location
-        )
+        # Record metrics for lifecycle events based on status
+        if new_status == "accepted":
+            # We would need firm_id and zone info for this, but they're not available in this context
+            # For now, we'll skip detailed metrics for status updates
+            pass
+        elif new_status == "completed":
+            # We would need firm_id, zone, and timing info for this
+            # For now, we'll skip detailed metrics for status updates  
+            pass
+        # Note: Consider implementing a simpler metrics method for status updates
         
         # Send real-time status update to all subscribers
         additional_data = {}
@@ -727,7 +773,8 @@ class EmergencyService:
         # Query for pending requests that belong to groups with subscriptions from this firm
         result = await self.db.execute(
             select(PanicRequest).options(
-                selectinload(PanicRequest.group).selectinload(UserGroup.user),
+                selectinload(PanicRequest.user),
+                selectinload(PanicRequest.group),
                 selectinload(PanicRequest.status_updates)
             ).join(UserGroup).join(
                 StoredSubscription, UserGroup.subscription_id == StoredSubscription.id
@@ -1072,6 +1119,7 @@ class EmergencyService:
             List of assigned panic requests
         """
         query = select(PanicRequest).options(
+            selectinload(PanicRequest.user),
             selectinload(PanicRequest.group),
             selectinload(PanicRequest.status_updates)
         ).where(PanicRequest.assigned_team_id == team_id)
@@ -1222,32 +1270,73 @@ class EmergencyService:
         offset: int = 0
     ) -> List[PanicRequest]:
         """
-        Get panic requests assigned to a specific field agent
+        Get panic requests accessible to a specific firm personnel
+        
+        - Field agents and team leaders: see requests assigned to their team
+        - Firm supervisors and firm users without team: see all requests for their firm
+        - Other roles without team: no access
         
         Args:
-            agent_id: Field agent ID
+            agent_id: Firm personnel ID
             status_filter: Optional status filter
             limit: Maximum number of requests to return
             offset: Number of requests to skip
             
         Returns:
-            List of assigned panic requests
+            List of accessible panic requests
         """
         # Get agent's team first
         from app.models.security_firm import FirmPersonnel
-        result = await self.db.execute(
-            select(FirmPersonnel).where(FirmPersonnel.id == agent_id)
-        )
-        agent = result.scalar_one_or_none()
+        try:
+            result = await self.db.execute(
+                select(FirmPersonnel).where(FirmPersonnel.id == agent_id)
+            )
+            agent = result.scalar_one_or_none()
+            
+            if not agent:
+                logger.warning(f"Agent not found: {agent_id}")
+                return []
+                
+            logger.info(f"Found agent: {agent.email}, role: {agent.role}, team: {agent.team_id}, firm: {agent.firm_id}")
+        except Exception as e:
+            logger.error(f"Error fetching agent {agent_id}: {str(e)}")
+            raise
         
-        if not agent or not agent.team_id:
-            return []
-        
-        # Get requests assigned to agent's team
+        # Build query based on user role and team assignment
         query = select(PanicRequest).options(
+            selectinload(PanicRequest.user),
             selectinload(PanicRequest.group),
             selectinload(PanicRequest.status_updates)
-        ).where(PanicRequest.assigned_team_id == agent.team_id)
+        )
+        
+        if agent.team_id:
+            # Field agents and team leaders: see only their team's requests
+            query = query.where(PanicRequest.assigned_team_id == agent.team_id)
+        elif agent.role in ["firm_supervisor", "firm_user", "firm_admin"]:
+            # Firm supervisors and users without team: see all requests for their firm
+            # First check if there are any teams for their firm
+            from app.models.security_firm import Team
+            logger.info(f"Looking for teams for firm {agent.firm_id}")
+            try:
+                team_result = await self.db.execute(
+                    select(Team.id).where(Team.firm_id == agent.firm_id)
+                )
+                team_ids = team_result.scalars().all()
+                logger.info(f"Found {len(team_ids)} teams for firm {agent.firm_id}")
+                
+                if team_ids:
+                    # If there are teams for this firm, show requests assigned to any of those teams
+                    query = query.where(PanicRequest.assigned_team_id.in_(team_ids))
+                else:
+                    # If no teams exist for this firm yet, return empty list
+                    logger.info(f"No teams found for firm {agent.firm_id}, returning empty list")
+                    return []
+            except Exception as e:
+                logger.error(f"Error checking teams for firm {agent.firm_id}: {str(e)}")
+                raise
+        else:
+            # Other roles without team assignment: no access
+            return []
         
         if status_filter:
             query = query.where(PanicRequest.status == status_filter)
@@ -1637,27 +1726,34 @@ class EmergencyService:
     
     async def _handle_prank_flag(self, group_id: UUID) -> None:
         """
-        Handle prank flag by updating user's prank count
+        Handle prank flag by updating group owner's prank count
         
         Args:
             group_id: User group ID
         """
-        # Get the group and user
+        # Get the group owner (user with role 'owner' in memberships)
+        from app.models.user import UserGroupMembership
+        
         result = await self.db.execute(
-            select(UserGroup).options(
-                selectinload(UserGroup.user)
-            ).where(UserGroup.id == group_id)
+            select(RegisteredUser).join(
+                UserGroupMembership, RegisteredUser.id == UserGroupMembership.user_id
+            ).where(
+                and_(
+                    UserGroupMembership.group_id == group_id,
+                    UserGroupMembership.role == 'owner'
+                )
+            )
         )
         
-        group = result.scalar_one_or_none()
-        if group and group.user:
+        owner = result.scalar_one_or_none()
+        if owner:
             # Increment prank flags
-            group.user.prank_flags += 1
+            owner.prank_flags += 1
             
             logger.info(
                 "user_prank_flag_incremented",
-                user_id=str(group.user.id),
-                total_prank_flags=group.user.prank_flags
+                user_id=str(owner.id),
+                total_prank_flags=owner.prank_flags
             )
     
     async def get_agent_active_requests(
@@ -1703,3 +1799,162 @@ class EmergencyService:
         )
         
         return result.scalars().all()
+    
+    async def find_nearest_team(
+        self,
+        latitude: float,
+        longitude: float,
+        firm_id: Optional[UUID] = None
+    ) -> Tuple[Optional[Team], Optional[float]]:
+        """
+        Find the nearest team to a given location based on distance to coverage area centroid
+        
+        Args:
+            latitude: Request location latitude
+            longitude: Request location longitude  
+            firm_id: Optional firm ID to filter teams
+            
+        Returns:
+            Tuple of (nearest_team, distance_km) or (None, None) if no teams found
+        """
+        try:
+            # Create a point from the request location
+            request_point = func.ST_SetSRID(func.ST_MakePoint(longitude, latitude), 4326)
+            
+            # Query to find the nearest team based on coverage area centroid
+            query = select(
+                Team,
+                # Calculate distance in kilometers between request point and coverage area centroid
+                func.ST_Distance(
+                    func.ST_Transform(request_point, 3857),
+                    func.ST_Transform(func.ST_Centroid(CoverageArea.boundary), 3857)
+                ).label('distance_m')
+            ).join(
+                CoverageArea, Team.coverage_area_id == CoverageArea.id
+            ).where(
+                and_(
+                    Team.is_active == True,
+                    CoverageArea.is_active == True
+                )
+            )
+            
+            # Filter by firm if specified
+            if firm_id:
+                query = query.where(Team.firm_id == firm_id)
+            
+            # Order by distance and get the nearest
+            query = query.order_by('distance_m').limit(1)
+            
+            result = await self.db.execute(query)
+            row = result.first()
+            
+            if row:
+                team, distance_m = row
+                distance_km = distance_m / 1000.0  # Convert meters to kilometers
+                logger.info(f"Found nearest team: {team.name} at {distance_km:.2f}km distance")
+                return team, distance_km
+            else:
+                logger.warning(f"No teams found for location ({latitude}, {longitude})")
+                return None, None
+                
+        except Exception as e:
+            logger.error(f"Error finding nearest team: {e}")
+            raise EmergencyRequestError(f"Failed to find nearest team: {str(e)}")
+    
+    async def assign_request_to_nearest_team(
+        self,
+        request_id: UUID,
+        assigner_id: UUID,
+        max_distance_km: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """
+        Assign a panic request to the nearest available team
+        
+        Args:
+            request_id: Panic request ID
+            assigner_id: ID of the user making the assignment
+            max_distance_km: Maximum distance in km to consider teams (optional)
+            
+        Returns:
+            Dict with assignment details including team info and distance
+            
+        Raises:
+            EmergencyRequestError: If assignment fails
+        """
+        # Get the panic request
+        panic_request = await self.get_request_by_id(request_id)
+        if not panic_request:
+            raise EmergencyRequestError("Panic request not found")
+        
+        # Check if already assigned
+        if panic_request.assigned_team_id:
+            # Get current team info for comparison
+            current_team_result = await self.db.execute(
+                select(Team).where(Team.id == panic_request.assigned_team_id)
+            )
+            current_team = current_team_result.scalar_one_or_none()
+            raise EmergencyRequestError(
+                f"Request is already assigned to team: {current_team.name if current_team else 'Unknown'}"
+            )
+        
+        # Extract coordinates from the geometry
+        from geoalchemy2.functions import ST_X, ST_Y
+        location_result = await self.db.execute(
+            select(ST_X(PanicRequest.location), ST_Y(PanicRequest.location))
+            .where(PanicRequest.id == request_id)
+        )
+        coordinates = location_result.first()
+        if not coordinates:
+            raise EmergencyRequestError("Could not extract location coordinates from panic request")
+        
+        longitude, latitude = coordinates
+        
+        # Find the nearest team
+        nearest_team, distance_km = await self.find_nearest_team(
+            latitude=latitude,
+            longitude=longitude,
+            firm_id=None  # Search all firms for now, can be restricted later
+        )
+        
+        if not nearest_team:
+            raise EmergencyRequestError("No available teams found for this location")
+        
+        # Check distance limit if specified
+        if max_distance_km and distance_km > max_distance_km:
+            raise EmergencyRequestError(
+                f"Nearest team is {distance_km:.2f}km away, which exceeds the maximum distance of {max_distance_km}km"
+            )
+        
+        # Assign the request to the nearest team
+        panic_request.assigned_team_id = nearest_team.id
+        panic_request.status = "assigned"
+        panic_request.updated_at = datetime.utcnow()
+        
+        # Create a status update record
+        from app.models.emergency import RequestStatusUpdate
+        status_update = RequestStatusUpdate(
+            id=uuid4(),
+            request_id=request_id,
+            status="assigned",
+            updated_by=assigner_id,
+            message=f"Auto-assigned to nearest team: {nearest_team.name} ({distance_km:.2f}km away)",
+            created_at=datetime.utcnow()
+        )
+        
+        self.db.add(status_update)
+        await self.db.commit()
+        
+        # Log the assignment
+        logger.info(f"Assigned request {request_id} to team {nearest_team.name} at {distance_km:.2f}km distance")
+        
+        return {
+            "request_id": str(request_id),
+            "assigned_team": {
+                "id": str(nearest_team.id),
+                "name": nearest_team.name,
+                "firm_id": str(nearest_team.firm_id)
+            },
+            "distance_km": round(distance_km, 2),
+            "status": "assigned",
+            "message": f"Request successfully assigned to {nearest_team.name}"
+        }

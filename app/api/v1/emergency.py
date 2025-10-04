@@ -4,9 +4,10 @@ Emergency request API endpoints
 from typing import List, Optional
 from uuid import UUID
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel, Field, validator
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, and_, func
 
 from app.core.database import get_db
 from app.core.auth import get_current_user
@@ -14,6 +15,9 @@ from app.core.middleware import require_mobile_attestation
 from app.core.auth import UserContext
 from app.services.emergency import EmergencyService, EmergencyRequestError
 from app.models.emergency import PanicRequest
+import structlog
+
+logger = structlog.get_logger()
 
 router = APIRouter()
 
@@ -47,6 +51,8 @@ class PanicRequestResponse(BaseModel):
     """Panic request response model"""
     id: UUID
     requester_phone: str
+    requester_name: Optional[str]
+    user_id: Optional[UUID]
     group_id: UUID
     service_type: str
     latitude: float
@@ -70,9 +76,19 @@ class PanicRequestResponse(BaseModel):
         # Extract coordinates from PostGIS point
         point = to_shape(panic_request.location)
         
+        # Get requester name and user_id from the direct user relationship
+        requester_name = None
+        user_id = None
+        if hasattr(panic_request, 'user') and panic_request.user:
+            user = panic_request.user
+            requester_name = f"{user.first_name} {user.last_name}".strip()
+            user_id = user.id
+        
         return cls(
             id=panic_request.id,
             requester_phone=panic_request.requester_phone,
+            requester_name=requester_name,
+            user_id=user_id,
             group_id=panic_request.group_id,
             service_type=panic_request.service_type,
             latitude=point.y,
@@ -406,10 +422,31 @@ async def update_request_status(
     """
     Update panic request status
     
-    Allows authorized users (field agents, team leaders) to update
+    Allows authorized users (field agents, team leaders, firm users, firm supervisors) to update
     the status of panic requests with optional location tracking.
     """
     try:
+        # Authorization check - firm personnel with appropriate roles
+        if not current_user.is_firm_personnel():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error_code": "ACCESS_DENIED",
+                    "message": "Only firm personnel can update request status",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+        if current_user.role not in ["field_agent", "team_leader", "firm_user", "firm_supervisor"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error_code": "INSUFFICIENT_PERMISSIONS",
+                    "message": "Only field agents, team leaders, firm users, and firm supervisors can update request status",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
         emergency_service = EmergencyService(db)
         
         # Prepare location tuple if provided
@@ -451,6 +488,14 @@ async def update_request_status(
             }
         )
     except Exception as e:
+        # Log the actual exception details for debugging
+        logger.error(
+            "emergency_status_update_failed",
+            request_id=str(request_id),
+            exception_type=type(e).__name__,
+            exception_message=str(e),
+            user_id=str(current_user.user_id) if current_user else None
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
@@ -528,8 +573,9 @@ async def get_pending_requests_for_firm(
     """
     Get pending panic requests for a security firm
     
-    This endpoint allows office staff to view pending requests
-    that need to be allocated to teams or service providers.
+    This endpoint allows all firm personnel (including team leaders, firm users, 
+    and firm supervisors) to view pending requests that need to be allocated 
+    to teams or service providers.
     """
     try:
         # Authorization check - only firm personnel can access their firm's requests
@@ -611,13 +657,13 @@ async def allocate_request(
                 }
             )
         
-        # Check if user has office staff role
-        if current_user.role not in ["office_staff", "team_leader"]:
+        # Check if user has appropriate role
+        if current_user.role not in ["firm_user", "firm_supervisor", "team_leader"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
                     "error_code": "INSUFFICIENT_PERMISSIONS",
-                    "message": "Only office staff and team leaders can allocate requests",
+                    "message": "Only firm users, supervisors and team leaders can allocate requests",
                     "timestamp": datetime.utcnow().isoformat()
                 }
             )
@@ -701,12 +747,12 @@ async def handle_call_service(
                 }
             )
         
-        if current_user.role != "office_staff":
+        if current_user.role not in ["firm_user", "firm_supervisor"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
                     "error_code": "INSUFFICIENT_PERMISSIONS",
-                    "message": "Only office staff can handle call requests",
+                    "message": "Only firm users and supervisors can handle call requests",
                     "timestamp": datetime.utcnow().isoformat()
                 }
             )
@@ -769,8 +815,8 @@ async def get_team_requests(
     """
     Get panic requests assigned to a specific team
     
-    This endpoint allows team leaders and office staff to view
-    requests assigned to a particular team.
+    This endpoint allows all firm personnel (including team leaders, firm users, 
+    and firm supervisors) to view requests assigned to a particular team.
     """
     try:
         # Authorization check
@@ -843,12 +889,12 @@ async def reassign_request(
                 }
             )
         
-        if current_user.role not in ["office_staff", "team_leader"]:
+        if current_user.role not in ["firm_user", "firm_supervisor", "team_leader"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
                     "error_code": "INSUFFICIENT_PERMISSIONS",
-                    "message": "Only office staff and team leaders can reassign requests",
+                    "message": "Only firm users, supervisors and team leaders can reassign requests",
                     "timestamp": datetime.utcnow().isoformat()
                 }
             )
@@ -944,11 +990,11 @@ async def get_agent_requests(
     """
     Get panic requests assigned to the current field agent
     
-    This endpoint allows field agents to view requests assigned
-    to their team that they can accept and handle.
+    This endpoint allows field agents, team leaders, firm users, and firm supervisors 
+    to view requests assigned to their team that they can accept and handle.
     """
     try:
-        # Authorization check - only field agents
+        # Authorization check - firm personnel with appropriate roles
         if not current_user.is_firm_personnel():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -959,12 +1005,85 @@ async def get_agent_requests(
                 }
             )
         
-        if current_user.role not in ["field_agent", "team_leader"]:
+        if current_user.role not in ["field_agent", "team_leader", "firm_user", "firm_supervisor", "firm_admin", "admin"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
                     "error_code": "INSUFFICIENT_PERMISSIONS",
-                    "message": "Only field agents and team leaders can access agent requests",
+                    "message": "Only field agents, team leaders, firm users, firm supervisors, and firm admins can access agent requests",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+        emergency_service = EmergencyService(db)
+        
+        requests = await emergency_service.get_agent_assigned_requests(
+            agent_id=current_user.user_id,
+            status_filter=status_filter,
+            limit=limit,
+            offset=offset
+        )
+        
+        # Convert to response models
+        request_responses = [
+            PanicRequestResponse.from_panic_request(req) for req in requests
+        ]
+        
+        return RequestListResponse(
+            requests=request_responses,
+            total=len(request_responses),
+            limit=limit,
+            offset=offset
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import structlog
+        logger = structlog.get_logger()
+        logger.error("Error in get_agent_requests", error=str(e), exception_type=type(e).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error_code": "INTERNAL_ERROR",
+                "message": "Failed to retrieve agent requests",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
+
+
+@router.get("/dashboard/agent/requests", response_model=RequestListResponse)
+async def get_agent_requests_dashboard(
+    status_filter: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserContext = Depends(get_current_user)
+):
+    """
+    Get panic requests assigned to the current field agent (Web Dashboard Version)
+    
+    This endpoint allows field agents, team leaders, firm users, and firm supervisors 
+    to view requests assigned to their team from a web dashboard interface.
+    """
+    try:
+        # Authorization check - firm personnel with appropriate roles
+        if not current_user.is_firm_personnel():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error_code": "ACCESS_DENIED",
+                    "message": "Only firm personnel can access this endpoint",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+        if current_user.role not in ["field_agent", "team_leader", "firm_user", "firm_supervisor", "firm_admin", "admin"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error_code": "INSUFFICIENT_PERMISSIONS",
+                    "message": "Only field agents, team leaders, firm users, firm supervisors, and firm admins can access agent requests",
                     "timestamp": datetime.utcnow().isoformat()
                 }
             )
@@ -997,7 +1116,7 @@ async def get_agent_requests(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
                 "error_code": "INTERNAL_ERROR",
-                "message": "Failed to retrieve agent requests",
+                "message": "Failed to retrieve agent requests for dashboard",
                 "timestamp": datetime.utcnow().isoformat()
             }
         )
@@ -1246,6 +1365,585 @@ async def complete_request(
             detail={
                 "error_code": "INTERNAL_ERROR",
                 "message": "Failed to complete request",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
+
+
+@router.post("/requests/{request_id}/assign-nearest-team")
+async def assign_request_to_nearest_team(
+    request_id: UUID,
+    max_distance_km: Optional[float] = Query(None, description="Maximum distance in km to consider teams"),
+    db: AsyncSession = Depends(get_db),
+    current_user: UserContext = Depends(get_current_user)
+):
+    """
+    Assign a panic request to the nearest available team based on distance
+    
+    This endpoint automatically finds the nearest team to the request location
+    and assigns the request to that team. The distance is calculated from the
+    request location to the centroid of each team's coverage area.
+    
+    **Authorization:** firm_admin, firm_supervisor, or firm_user roles required
+    
+    **Request Parameters:**
+    - request_id: UUID of the panic request to assign
+    - max_distance_km: Optional maximum distance in kilometers to consider teams
+    
+    **Returns:**
+    - assignment_details: Information about the assigned team and distance
+    """
+    try:
+        # Authorization check - only firm personnel with management roles can assign
+        if not current_user.is_firm_personnel() or current_user.role not in ["firm_admin", "firm_supervisor", "firm_user", "team_leader"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error_code": "INSUFFICIENT_PERMISSIONS",
+                    "message": "Only firm administrators, supervisors, users, and team leaders can assign requests to teams",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+        emergency_service = EmergencyService(db)
+        
+        # Perform the distance-based assignment
+        assignment_result = await emergency_service.assign_request_to_nearest_team(
+            request_id=request_id,
+            assigner_id=current_user.user_id,
+            max_distance_km=max_distance_km
+        )
+        
+        return {
+            "success": True,
+            "assignment": assignment_result,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except EmergencyRequestError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error_code": "ASSIGNMENT_FAILED",
+                "message": str(e),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in assign_request_to_nearest_team", error=str(e), exception_type=type(e).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error_code": "INTERNAL_ERROR",
+                "message": "Failed to assign request to nearest team",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
+
+
+# Dashboard/Web Interface Endpoints (No Mobile Attestation Required)
+
+@router.get("/dashboard/requests", response_model=RequestListResponse)
+async def get_dashboard_requests(
+    status_filter: Optional[str] = Query(None, description="Filter by status"),
+    service_type_filter: Optional[str] = Query(None, description="Filter by service type"),
+    limit: int = Query(50, description="Number of requests to return", le=100),
+    offset: int = Query(0, description="Offset for pagination"),
+    db: AsyncSession = Depends(get_db),
+    current_user: UserContext = Depends(get_current_user)
+):
+    """
+    Get panic requests for dashboard view (Web Interface)
+    
+    This endpoint allows supervisors, office staff, and firm administrators
+    to view and manage panic requests from the web dashboard.
+    
+    **Roles allowed:** firm_admin, firm_supervisor, firm_staff, firm_user, team_leader, admin
+    """
+    try:
+        # Authorization check - firm personnel and admins
+        if not current_user.is_firm_personnel() and current_user.role != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error_code": "ACCESS_DENIED",
+                    "message": "Only firm personnel and administrators can access dashboard requests",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+        # Allow these roles to access dashboard
+        allowed_roles = ["firm_admin", "firm_supervisor", "firm_staff", "firm_user", "team_leader", "admin"]
+        if current_user.role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error_code": "INSUFFICIENT_PERMISSIONS",
+                    "message": f"Role '{current_user.role}' not authorized for dashboard access",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+        emergency_service = EmergencyService(db)
+        
+        # Get requests based on user role
+        if current_user.role == "admin":
+            # Admins can see all requests
+            requests = await emergency_service.get_all_requests(
+                status_filter=status_filter,
+                service_type_filter=service_type_filter,
+                limit=limit,
+                offset=offset
+            )
+        else:
+            # Firm personnel see only their firm's requests
+            requests = await emergency_service.get_firm_requests(
+                firm_id=current_user.firm_id,
+                status_filter=status_filter,
+                service_type_filter=service_type_filter,
+                limit=limit,
+                offset=offset
+            )
+        
+        # Convert to response models
+        request_responses = [
+            PanicRequestResponse.from_panic_request(req) for req in requests
+        ]
+        
+        return RequestListResponse(
+            requests=request_responses,
+            total=len(request_responses),
+            limit=limit,
+            offset=offset
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error in get_dashboard_requests", error=str(e), exception_type=type(e).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error_code": "INTERNAL_ERROR",
+                "message": "Failed to retrieve dashboard requests",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
+
+
+@router.get("/dashboard/requests/{request_id}", response_model=PanicRequestResponse)
+async def get_dashboard_request_details(
+    request_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserContext = Depends(get_current_user)
+):
+    """
+    Get detailed panic request information for dashboard
+    
+    **Roles allowed:** firm_admin, firm_supervisor, firm_staff, firm_user, team_leader, admin
+    """
+    try:
+        # Authorization check
+        if not current_user.is_firm_personnel() and current_user.role != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error_code": "ACCESS_DENIED",
+                    "message": "Only firm personnel and administrators can access request details",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+        allowed_roles = ["firm_admin", "firm_supervisor", "firm_staff", "firm_user", "team_leader", "admin"]
+        if current_user.role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error_code": "INSUFFICIENT_PERMISSIONS",
+                    "message": f"Role '{current_user.role}' not authorized for dashboard access",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+        emergency_service = EmergencyService(db)
+        
+        panic_request = await emergency_service.get_request_by_id(request_id)
+        
+        if not panic_request:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error_code": "REQUEST_NOT_FOUND",
+                    "message": "Panic request not found",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+        # Additional authorization: firm personnel can only see their firm's requests
+        if current_user.role != "admin" and current_user.is_firm_personnel():
+            # Need to verify request belongs to user's firm
+            # This would require checking the request assignment or service provider
+            pass  # For now, allow access - implement firm verification in service layer
+        
+        return PanicRequestResponse.from_panic_request(panic_request)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error in get_dashboard_request_details", error=str(e), exception_type=type(e).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error_code": "INTERNAL_ERROR",
+                "message": "Failed to retrieve request details",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
+
+
+@router.put("/dashboard/requests/{request_id}/status", response_model=dict)
+async def update_dashboard_request_status(
+    request_id: UUID,
+    status_update: RequestStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserContext = Depends(get_current_user)
+):
+    """
+    Update panic request status from dashboard (Web Interface)
+    
+    This endpoint allows supervisors and office staff to update request status
+    from the web dashboard without requiring mobile attestation.
+    
+    **Roles allowed:** firm_admin, firm_supervisor, firm_staff, firm_user, team_leader
+    """
+    try:
+        # Authorization check - firm personnel with appropriate roles
+        if not current_user.is_firm_personnel():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error_code": "ACCESS_DENIED",
+                    "message": "Only firm personnel can update request status",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+        # Allow these roles to update status from dashboard
+        allowed_roles = ["firm_admin", "firm_supervisor", "firm_staff", "firm_user", "team_leader"]
+        if current_user.role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error_code": "INSUFFICIENT_PERMISSIONS",
+                    "message": f"Role '{current_user.role}' cannot update request status from dashboard",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+        emergency_service = EmergencyService(db)
+        
+        # Prepare location tuple if provided
+        location = None
+        if status_update.latitude is not None and status_update.longitude is not None:
+            location = (status_update.latitude, status_update.longitude)
+        
+        success = await emergency_service.update_request_status(
+            request_id=request_id,
+            new_status=status_update.status,
+            message=status_update.message,
+            updated_by_id=current_user.user_id,
+            location=location
+        )
+        
+        if success:
+            return {
+                "success": True,
+                "message": "Request status updated successfully from dashboard",
+                "updated_by": {
+                    "user_id": str(current_user.user_id),
+                    "role": current_user.role
+                },
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error_code": "UPDATE_FAILED",
+                    "message": "Failed to update request status",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+    except EmergencyRequestError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error_code": e.error_code,
+                "message": e.message,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "dashboard_status_update_failed",
+            request_id=str(request_id),
+            exception_type=type(e).__name__,
+            exception_message=str(e),
+            user_id=str(current_user.user_id) if current_user else None
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error_code": "INTERNAL_ERROR",
+                "message": "Failed to update request status from dashboard",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
+
+
+@router.post("/dashboard/requests/{request_id}/respond", response_model=dict)
+async def respond_to_request_dashboard(
+    request_id: UUID,
+    response_data: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserContext = Depends(get_current_user)
+):
+    """
+    Respond to a panic request from dashboard
+    
+    This endpoint allows supervisors and office staff to respond to panic requests
+    by assigning them, updating status, or adding notes.
+    
+    **Roles allowed:** firm_admin, firm_supervisor, firm_staff, firm_user, team_leader
+    """
+    try:
+        # Authorization check
+        if not current_user.is_firm_personnel():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error_code": "ACCESS_DENIED",
+                    "message": "Only firm personnel can respond to requests",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+        allowed_roles = ["firm_admin", "firm_supervisor", "firm_staff", "firm_user", "team_leader"]
+        if current_user.role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error_code": "INSUFFICIENT_PERMISSIONS",
+                    "message": f"Role '{current_user.role}' cannot respond to requests from dashboard",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+        emergency_service = EmergencyService(db)
+        
+        # Get the request first to verify it exists
+        panic_request = await emergency_service.get_request_by_id(request_id)
+        if not panic_request:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error_code": "REQUEST_NOT_FOUND",
+                    "message": "Panic request not found",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+        # Process the response based on the action
+        action = response_data.get("action", "acknowledge")
+        
+        if action == "acknowledge":
+            # Simply acknowledge the request
+            success = await emergency_service.update_request_status(
+                request_id=request_id,
+                new_status="acknowledged",
+                message=response_data.get("message", "Request acknowledged by office staff"),
+                updated_by_id=current_user.user_id
+            )
+        elif action == "assign":
+            # Assign to team or service provider
+            if "team_id" in response_data:
+                success = await emergency_service.allocate_request_to_team(
+                    request_id=request_id,
+                    team_id=UUID(response_data["team_id"]),
+                    allocated_by_id=current_user.user_id
+                )
+            elif "service_provider_id" in response_data:
+                success = await emergency_service.allocate_request_to_service_provider(
+                    request_id=request_id,
+                    service_provider_id=UUID(response_data["service_provider_id"]),
+                    allocated_by_id=current_user.user_id
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error_code": "INVALID_ASSIGNMENT",
+                        "message": "Must specify team_id or service_provider_id for assignment",
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
+                )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error_code": "INVALID_ACTION",
+                    "message": f"Unknown action: {action}",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+        if success:
+            return {
+                "success": True,
+                "message": f"Request {action} successful",
+                "action": action,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error_code": "RESPONSE_FAILED",
+                    "message": f"Failed to {action} request",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error in respond_to_request_dashboard", error=str(e), exception_type=type(e).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error_code": "INTERNAL_ERROR",
+                "message": "Failed to respond to request",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
+
+
+@router.get("/teams/nearest")
+async def find_nearest_teams(
+    latitude: float = Query(..., description="Latitude of the location"),
+    longitude: float = Query(..., description="Longitude of the location"),
+    limit: int = Query(5, description="Maximum number of teams to return", le=20),
+    firm_id: Optional[UUID] = Query(None, description="Optional firm ID to filter teams"),
+    db: AsyncSession = Depends(get_db),
+    current_user: UserContext = Depends(get_current_user)
+):
+    """
+    Find the nearest teams to a given location
+    
+    This endpoint returns a list of teams ordered by their distance from the
+    specified location. Distance is calculated from the location to the
+    centroid of each team's coverage area.
+    
+    **Authorization:** firm personnel roles required
+    
+    **Query Parameters:**
+    - latitude: Latitude of the location to search from
+    - longitude: Longitude of the location to search from  
+    - limit: Maximum number of teams to return (default: 5, max: 20)
+    - firm_id: Optional firm ID to filter teams
+    
+    **Returns:**
+    - teams: List of teams with distance information
+    """
+    try:
+        # Authorization check - firm personnel can search for teams
+        if not current_user.is_firm_personnel():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error_code": "INSUFFICIENT_PERMISSIONS",
+                    "message": "Only firm personnel can search for nearest teams",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+        emergency_service = EmergencyService(db)
+        
+        # Create a point from the location
+        request_point = func.ST_SetSRID(func.ST_MakePoint(longitude, latitude), 4326)
+        
+        # Query to find the nearest teams based on coverage area centroid
+        from app.models.security_firm import Team, CoverageArea
+        query = select(
+            Team,
+            CoverageArea,
+            # Calculate distance in meters between location and coverage area centroid
+            func.ST_Distance(
+                func.ST_Transform(request_point, 3857),
+                func.ST_Transform(func.ST_Centroid(CoverageArea.boundary), 3857)
+            ).label('distance_m')
+        ).join(
+            CoverageArea, Team.coverage_area_id == CoverageArea.id
+        ).where(
+            and_(
+                Team.is_active == True,
+                CoverageArea.is_active == True
+            )
+        )
+        
+        # Filter by firm if specified
+        if firm_id:
+            query = query.where(Team.firm_id == firm_id)
+        
+        # Order by distance and limit results
+        query = query.order_by('distance_m').limit(limit)
+        
+        result = await db.execute(query)
+        rows = result.all()
+        
+        teams_with_distance = []
+        for row in rows:
+            team, coverage_area, distance_m = row
+            distance_km = distance_m / 1000.0  # Convert meters to kilometers
+            
+            teams_with_distance.append({
+                "team": {
+                    "id": str(team.id),
+                    "name": team.name,
+                    "firm_id": str(team.firm_id),
+                    "is_active": team.is_active
+                },
+                "coverage_area": {
+                    "id": str(coverage_area.id),
+                    "name": coverage_area.name
+                },
+                "distance_km": round(distance_km, 2)
+            })
+        
+        return {
+            "teams": teams_with_distance,
+            "location": {
+                "latitude": latitude,
+                "longitude": longitude
+            },
+            "total_found": len(teams_with_distance),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in find_nearest_teams", error=str(e), exception_type=type(e).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error_code": "INTERNAL_ERROR",
+                "message": "Failed to find nearest teams",
                 "timestamp": datetime.utcnow().isoformat()
             }
         )

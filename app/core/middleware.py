@@ -11,6 +11,7 @@ import uuid
 from app.services.attestation import attestation_service, AttestationError
 from app.core.exceptions import create_error_response, ErrorCodes
 from app.core.logging import get_logger, set_request_context, clear_request_context, SecurityEventType
+from app.core.config import settings
 
 logger = get_logger(__name__)
 
@@ -90,13 +91,48 @@ class MobileAttestationMiddleware(BaseHTTPMiddleware):
     EXEMPT_PATHS = [
         "/api/v1/mobile/auth/register",
         "/api/v1/mobile/auth/request-challenge",  # For initial attestation setup
+        "/api/v1/emergency/dashboard/",  # Web dashboard endpoints
+        "/api/v1/emergency/statistics",  # Statistics endpoint
+        "/api/v1/emergency/firm/",  # Firm-specific endpoints
         "/health",
         "/docs",
         "/redoc",
         "/openapi.json"
     ]
     
+    def _add_cors_headers(self, request: Request, response: JSONResponse):
+        """Add CORS headers to error responses"""
+        origin = request.headers.get("origin")
+        if origin:
+            # Allow localhost origins in development
+            if origin.startswith(("http://localhost:", "http://127.0.0.1:", "https://localhost:", "https://127.0.0.1:")):
+                try:
+                    if "localhost:" in origin:
+                        port_str = origin.split("localhost:")[1].split("/")[0]
+                    elif "127.0.0.1:" in origin:
+                        port_str = origin.split("127.0.0.1:")[1].split("/")[0]
+                    else:
+                        port_str = "0"
+                    
+                    port = int(port_str)
+                    
+                    # Allow ports 3000-3999 (regular apps) and 4000-4099 (admin apps)
+                    if (3000 <= port <= 3999) or (4000 <= port <= 4099) or port in [8080, 5173]:
+                        response.headers["Access-Control-Allow-Origin"] = origin
+                        response.headers["Access-Control-Allow-Credentials"] = "true"
+                        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+                        response.headers["Access-Control-Allow-Headers"] = (
+                            "Accept, Accept-Language, Content-Language, Content-Type, Authorization, "
+                            "X-Requested-With, X-Platform, X-App-Version, X-Device-ID"
+                        )
+                except (ValueError, IndexError):
+                    pass
+    
     async def dispatch(self, request: Request, call_next: Callable):
+        # Always allow OPTIONS requests (CORS preflight) to pass through
+        if request.method == "OPTIONS":
+            return await call_next(request)
+            
         # Check if this is a mobile endpoint that requires attestation
         if not self._requires_attestation(request):
             return await call_next(request)
@@ -124,7 +160,7 @@ class MobileAttestationMiddleware(BaseHTTPMiddleware):
                 client_ip=request.client.host if request.client else None
             )
             
-            return JSONResponse(
+            response = JSONResponse(
                 status_code=401,
                 content=create_error_response(
                     error_code=ErrorCodes.INVALID_ATTESTATION,
@@ -133,6 +169,10 @@ class MobileAttestationMiddleware(BaseHTTPMiddleware):
                     request_id=getattr(request.state, 'request_id', None)
                 )
             )
+            
+            # Add CORS headers to error response
+            self._add_cors_headers(request, response)
+            return response
         
         except Exception as e:
             logger.error(
@@ -143,7 +183,7 @@ class MobileAttestationMiddleware(BaseHTTPMiddleware):
             )
             
             # Convert general exceptions to AttestationError for consistency
-            return JSONResponse(
+            response = JSONResponse(
                 status_code=401,
                 content=create_error_response(
                     error_code=ErrorCodes.INVALID_ATTESTATION,
@@ -152,6 +192,10 @@ class MobileAttestationMiddleware(BaseHTTPMiddleware):
                     request_id=getattr(request.state, 'request_id', None)
                 )
             )
+            
+            # Add CORS headers to error response
+            self._add_cors_headers(request, response)
+            return response
     
     def _requires_attestation(self, request: Request) -> bool:
         """Check if the request path requires attestation"""
@@ -168,6 +212,18 @@ class MobileAttestationMiddleware(BaseHTTPMiddleware):
         """Verify attestation based on platform headers"""
         # Get platform from headers
         platform = request.headers.get("X-Platform", "").lower()
+        
+        # Skip attestation verification if disabled in settings
+        if not settings.REQUIRE_MOBILE_ATTESTATION:
+            logger.debug(
+                "Mobile attestation verification skipped (disabled in settings)",
+                platform=platform,
+                path=request.url.path
+            )
+            # Set request state for consistency
+            request.state.attestation_verified = True
+            request.state.platform = platform or "web"
+            return
         
         if platform == "android":
             await self._verify_android_attestation(request)

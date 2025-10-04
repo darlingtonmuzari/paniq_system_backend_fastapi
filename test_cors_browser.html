@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CORS Test</title>
+</head>
+<body>
+    <h1>CORS Test for Panic System API</h1>
+    <button onclick="testHealthEndpoint()">Test Health Endpoint</button>
+    <button onclick="testEmergencyProviders()">Test Emergency Providers (401 expected)</button>
+    <button onclick="testEmergencyProviderTypes()">Test Emergency Provider Types (401 expected)</button>
+    <div id="results"></div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        const resultsDiv = document.getElementById('results');
+
+        function logResult(test, status, data) {
+            const result = document.createElement('div');
+            result.innerHTML = `<strong>${test}:</strong> Status ${status} - ${JSON.stringify(data)}`;
+            result.style.margin = '10px 0';
+            result.style.padding = '10px';
+            result.style.backgroundColor = status < 400 ? '#d4edda' : status === 401 ? '#fff3cd' : '#f8d7da';
+            result.style.border = '1px solid';
+            result.style.borderColor = status < 400 ? '#c3e6cb' : status === 401 ? '#ffeaa7' : '#f5c6cb';
+            resultsDiv.appendChild(result);
+        }
+
+        async function testHealthEndpoint() {
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                const data = await response.json();
+                logResult('Health Endpoint', response.status, data);
+            } catch (error) {
+                logResult('Health Endpoint', 'ERROR', error.message);
+            }
+        }
+
+        async function testEmergencyProviders() {
+            try {
+                const response = await fetch(`${API_BASE}/api/v1/emergency-providers/`);
+                const data = await response.json();
+                logResult('Emergency Providers', response.status, data);
+            } catch (error) {
+                logResult('Emergency Providers', 'ERROR', error.message);
+            }
+        }
+
+        async function testEmergencyProviderTypes() {
+            try {
+                const response = await fetch(`${API_BASE}/api/v1/emergency-provider-types/`);
+                const data = await response.json();
+                logResult('Emergency Provider Types', response.status, data);
+            } catch (error) {
+                logResult('Emergency Provider Types', 'ERROR', error.message);
+            }
+        }
+
+        // Auto-run tests on page load
+        window.onload = function() {
+            setTimeout(() => {
+                testHealthEndpoint();
+                setTimeout(() => testEmergencyProviders(), 1000);
+                setTimeout(() => testEmergencyProviderTypes(), 2000);
+            }, 500);
+        };
+    </script>
+</body>
+</html>

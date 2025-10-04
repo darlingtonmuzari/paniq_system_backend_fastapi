@@ -22,6 +22,20 @@ class RoleBasedCORSMiddleware(BaseHTTPMiddleware):
         self.admin_origins = settings.ADMIN_ALLOWED_ORIGINS
         self.all_origins = list(set(self.default_origins + self.admin_origins))
         
+        # Patterns for development environment detection
+        self.dev_origin_patterns = [
+            r'https://.*\.cloudworkstations\.dev',
+            r'https://.*\.gitpod\.io',
+            r'https://.*\.github\.dev',
+            r'https://.*\.codespaces\.github\.com',
+            r'https://.*\.replit\.com',
+            r'https://.*\.stackblitz\.com',
+            r'http://localhost:\d+',
+            r'https://localhost:\d+',
+            r'http://127\.0\.0\.1:\d+',
+            r'https://127\.0\.0\.1:\d+'
+        ]
+        
         # Patterns for admin/office staff endpoints
         self.admin_patterns = [
             r'/api/v1/admin/.*',
@@ -31,7 +45,10 @@ class RoleBasedCORSMiddleware(BaseHTTPMiddleware):
             r'/api/v1/cache-management/.*',
             r'/api/v1/database-optimization/.*',
             r'/api/v1/feedback/.*',
-            r'/api/v1/credits/.*'
+            r'/api/v1/credits/.*',
+            r'/api/v1/emergency/.*',  # Emergency endpoints
+            r'/api/v1/subscription-products/.*',  # Subscription product endpoints
+            r'/api/v1/personnel/.*'  # Personnel endpoints
         ]
     
     def is_admin_endpoint(self, path: str) -> bool:
@@ -41,11 +58,28 @@ class RoleBasedCORSMiddleware(BaseHTTPMiddleware):
                 return True
         return False
     
+    def is_dev_origin(self, origin: str) -> bool:
+        """Check if origin matches development environment patterns"""
+        if not origin:
+            return False
+        
+        for pattern in self.dev_origin_patterns:
+            if re.match(pattern, origin):
+                return True
+        return False
+    
     def get_allowed_origins(self, request: Request) -> List[str]:
         """Get allowed origins based on the request path"""
-        if self.is_admin_endpoint(request.url.path):
-            return self.all_origins  # Allow both regular and admin origins
-        return self.default_origins  # Only allow regular origins
+        # In development mode, be more permissive
+        if settings.DEBUG:
+            origin = request.headers.get("origin", "")
+            
+            # Check if origin matches development patterns
+            if self.is_dev_origin(origin):
+                return self.all_origins + [origin]
+        
+        # Always return all origins to ensure access
+        return self.all_origins
     
     def is_cors_preflight(self, request: Request) -> bool:
         """Check if this is a CORS preflight request"""
@@ -103,15 +137,47 @@ class RoleBasedCORSMiddleware(BaseHTTPMiddleware):
 
 def setup_cors_middleware(app):
     """Setup CORS middleware for the application"""
-    # Add our custom role-based CORS middleware
-    app.add_middleware(RoleBasedCORSMiddleware)
-    
-    # Also add the standard CORS middleware as fallback
-    # This will handle cases where our custom middleware doesn't apply
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.ALLOWED_ORIGINS + settings.ADMIN_ALLOWED_ORIGINS,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # In development mode, use simple CORS setup that allows all localhost origins
+    if settings.DEBUG:
+        all_localhost_origins = (
+            [f"http://localhost:{port}" for port in range(3000, 4000)] +
+            [f"http://localhost:{port}" for port in range(4000, 4100)] +
+            [f"https://localhost:{port}" for port in range(3000, 4000)] +
+            [f"https://localhost:{port}" for port in range(4000, 4100)] +
+            [f"http://127.0.0.1:{port}" for port in range(3000, 4000)] +
+            [f"http://127.0.0.1:{port}" for port in range(4000, 4100)] +
+            ["http://localhost:8080", "http://localhost:5173", "https://localhost:8080", "https://localhost:5173",
+             "http://localhost:4010", "http://127.0.0.1:4010"]  # Explicitly add port 4010
+        )
+        
+        # Add specific development environment origins
+        dev_origins = [
+            # Cloud Workstations
+            "https://6000-firebase-studio-1758341768037.cluster-64pjnskmlbaxowh5lzq6i7v4ra.cloudworkstations.dev",
+            # Add other common patterns - you can expand this as needed
+            "https://codespaces.githubusercontent.com",
+            "https://github.dev",
+        ]
+        
+        # Combine all allowed origins
+        all_origins = all_localhost_origins + dev_origins + settings.ALLOWED_ORIGINS + settings.ADMIN_ALLOWED_ORIGINS
+        
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],  # Allow all origins in development
+            allow_credentials=False,  # Must be False when using "*"
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    else:
+        # Add our custom role-based CORS middleware for production
+        app.add_middleware(RoleBasedCORSMiddleware)
+        
+        # Also add the standard CORS middleware as fallback
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.ALLOWED_ORIGINS + settings.ADMIN_ALLOWED_ORIGINS,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )

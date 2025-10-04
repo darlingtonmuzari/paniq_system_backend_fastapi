@@ -12,6 +12,7 @@ class PanicRequest(BaseModel):
     """Panic request model"""
     __tablename__ = "panic_requests"
     
+    user_id = Column(UUID(as_uuid=True), ForeignKey("registered_users.id"), nullable=False)
     group_id = Column(UUID(as_uuid=True), ForeignKey("user_groups.id"), nullable=False)
     requester_phone = Column(String(20), nullable=False)
     service_type = Column(String(20), nullable=False)  # call, security, ambulance, fire, towing
@@ -28,11 +29,14 @@ class PanicRequest(BaseModel):
     completed_at = Column(DateTime(timezone=True), nullable=True)
     
     # Relationships
+    user = relationship("RegisteredUser")
     group = relationship("UserGroup", back_populates="panic_requests")
     assigned_team = relationship("Team")
     assigned_service_provider = relationship("ServiceProvider")
     feedback = relationship("RequestFeedback", back_populates="request", cascade="all, delete-orphan")
     status_updates = relationship("RequestStatusUpdate", back_populates="request", cascade="all, delete-orphan")
+    provider_assignments = relationship("ProviderAssignment", back_populates="request", cascade="all, delete-orphan")
+    location_logs = relationship("LocationLog", cascade="all, delete-orphan")
 
 
 class ServiceProvider(BaseModel):
@@ -81,3 +85,19 @@ class RequestStatusUpdate(BaseModel):
     # Relationships
     request = relationship("PanicRequest", back_populates="status_updates")
     updated_by = relationship("FirmPersonnel")
+
+
+class LocationLog(BaseModel):
+    """Location log model for tracking user location changes during panic requests"""
+    __tablename__ = "location_logs"
+    
+    request_id = Column(UUID(as_uuid=True), ForeignKey("panic_requests.id"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("registered_users.id"), nullable=False)
+    location = Column(Geometry("POINT", srid=4326), nullable=False)
+    address = Column(Text, nullable=True)
+    accuracy = Column(Integer, nullable=True)  # GPS accuracy in meters
+    source = Column(String(20), default="mobile", nullable=False)  # mobile, web, manual
+    
+    # Relationships
+    request = relationship("PanicRequest")
+    user = relationship("RegisteredUser")

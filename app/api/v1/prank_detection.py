@@ -75,7 +75,7 @@ async def get_user_prank_tracking(
     # Check if current user is accessing their own data or is admin
     if str(current_user.user_id) != str(user_id):
         # Check if current user is admin personnel
-        if not hasattr(current_user, 'role') or current_user.role not in ['office_staff', 'admin']:
+        if not hasattr(current_user, 'role') or current_user.role not in ['firm_user', 'firm_supervisor', 'admin']:
             raise HTTPException(status_code=403, detail="Access denied")
     
     try:
@@ -89,13 +89,13 @@ async def get_user_prank_tracking(
 @router.post("/users/{user_id}/calculate-fine", response_model=Optional[UserFineResponse])
 async def calculate_automatic_fine(
     user_id: UUID,
-    current_personnel: FirmPersonnel = Depends(require_role("office_staff")),
+    current_personnel: FirmPersonnel = Depends(require_role("firm_supervisor")),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Calculate and create automatic fine for a user
     
-    Only accessible by office staff and admins
+    Only accessible by firm supervisors and admins
     """
     try:
         service = PrankDetectionService(db)
@@ -162,13 +162,13 @@ async def pay_fine(
 @router.post("/users/{user_id}/suspend")
 async def suspend_user_account(
     user_id: UUID,
-    current_personnel: FirmPersonnel = Depends(require_role("office_staff")),
+    current_personnel: FirmPersonnel = Depends(require_role("firm_supervisor")),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Suspend user account for unpaid fines
     
-    Only accessible by office staff and admins
+    Only accessible by firm supervisors and admins
     """
     try:
         service = PrankDetectionService(db)
@@ -225,7 +225,7 @@ async def get_user_fines(
     """
     # Check access permissions
     if str(current_user.user_id) != str(user_id):
-        if not hasattr(current_user, 'role') or current_user.role not in ['office_staff', 'admin']:
+        if not hasattr(current_user, 'role') or current_user.role not in ['firm_user', 'firm_supervisor', 'admin']:
             raise HTTPException(status_code=403, detail="Access denied")
     
     try:
@@ -253,13 +253,13 @@ async def get_user_fines(
 async def get_fine_statistics(
     date_from: Optional[datetime] = Query(None, description="Start date filter"),
     date_to: Optional[datetime] = Query(None, description="End date filter"),
-    current_personnel: FirmPersonnel = Depends(require_role("office_staff")),
+    current_personnel: FirmPersonnel = Depends(require_role("firm_supervisor")),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Get fine statistics
     
-    Only accessible by office staff and admins
+    Only accessible by firm supervisors and admins
     """
     try:
         service = PrankDetectionService(db)

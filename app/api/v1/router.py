@@ -6,11 +6,13 @@ from fastapi import APIRouter
 # Import available routers
 from app.api.v1.attestation import router as attestation_router
 from app.api.v1.auth import router as auth_router
+from app.api.v1.mobile_auth import router as mobile_auth_router
 from app.api.v1.security_firms import router as security_firms_router
 from app.api.v1.users import router as users_router
 from app.api.v1.mobile_users import router as mobile_users_router
 from app.api.v1.personnel import router as personnel_router
 from app.api.v1.credits import router as credits_router
+from app.api.v1.credit_tiers import router as credit_tiers_router
 from app.api.v1.payments import router as payments_router
 from app.api.v1.mobile_subscriptions import router as mobile_subscriptions_router
 from app.api.v1.subscription_products import router as subscription_products_router
@@ -18,6 +20,11 @@ from app.api.v1.subscription_products import router as subscription_products_rou
 # Import routers when they're created
 # from app.api.v1.subscriptions import router as subscriptions_router
 from app.api.v1.emergency import router as emergency_router
+from app.api.v1.emergency_dashboard import router as emergency_dashboard_router
+from app.api.v1.emergency_providers import router as emergency_providers_router
+from app.api.v1.emergency_provider_types import router as emergency_provider_types_router
+from app.api.v1.capabilities import router as capabilities_router
+from app.api.v1.capability_categories import router as capability_categories_router
 from app.api.v1.feedback import router as feedback_router
 from app.api.v1.websocket import router as websocket_router
 from app.api.v1.silent_mode import router as silent_mode_router
@@ -29,17 +36,20 @@ from app.api.v1.logs import router as logs_router
 from app.api.v1.document_types import router as document_types_router
 from app.api.v1.firm_applications import router as firm_applications_router
 from app.api.v1.application_details import router as application_details_router
+from app.api.v1.location_tracking import router as location_tracking_router
 
 api_router = APIRouter()
 
 # Include available routers
 api_router.include_router(attestation_router, prefix="/attestation", tags=["attestation"])
 api_router.include_router(auth_router, prefix="/auth", tags=["authentication"])
+api_router.include_router(mobile_auth_router, prefix="/auth", tags=["mobile-authentication"])
 api_router.include_router(security_firms_router, prefix="/security-firms", tags=["security-firms"])
 api_router.include_router(users_router, prefix="/users", tags=["users"])
 api_router.include_router(mobile_users_router, prefix="/mobile/users", tags=["mobile-users"])
 api_router.include_router(personnel_router, prefix="/personnel", tags=["personnel"])
 api_router.include_router(credits_router, prefix="/credits", tags=["credits"])
+api_router.include_router(credit_tiers_router, prefix="/credit-tiers", tags=["credit-tiers"])
 api_router.include_router(payments_router, tags=["payments"])
 api_router.include_router(mobile_subscriptions_router, prefix="/mobile/subscriptions", tags=["mobile-subscriptions"])
 api_router.include_router(subscription_products_router, prefix="/subscription-products", tags=["subscription-products"])
@@ -47,6 +57,11 @@ api_router.include_router(subscription_products_router, prefix="/subscription-pr
 # Include routers when they're created
 # api_router.include_router(subscriptions_router, prefix="/subscriptions", tags=["subscriptions"])
 api_router.include_router(emergency_router, prefix="/emergency", tags=["emergency"])
+api_router.include_router(emergency_dashboard_router, prefix="/emergency/dashboard", tags=["emergency-dashboard"])
+api_router.include_router(emergency_providers_router, prefix="/emergency-providers", tags=["emergency-providers"])
+api_router.include_router(emergency_provider_types_router, prefix="/emergency-provider-types", tags=["emergency-provider-types"])
+api_router.include_router(capabilities_router, prefix="/capabilities", tags=["capabilities"])
+api_router.include_router(capability_categories_router, prefix="/capability-categories", tags=["capability-categories"])
 api_router.include_router(feedback_router, prefix="/feedback", tags=["feedback"])
 api_router.include_router(websocket_router, tags=["websocket"])
 api_router.include_router(silent_mode_router, prefix="/mobile/silent-mode", tags=["mobile-silent-mode"])
@@ -58,6 +73,7 @@ api_router.include_router(logs_router, prefix="/admin", tags=["log-management"])
 api_router.include_router(document_types_router, prefix="/document-types", tags=["document-types"])
 api_router.include_router(firm_applications_router, prefix="/firm-applications", tags=["firm-applications"])
 api_router.include_router(application_details_router, prefix="/applications", tags=["application-details"])
+api_router.include_router(location_tracking_router, prefix="/location-tracking", tags=["location-tracking"])
 
 @api_router.get("/")
 async def root():

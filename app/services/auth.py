@@ -250,12 +250,14 @@ class JWTTokenService:
         except jwt.InvalidTokenError as e:
             raise AuthenticationError(f"Invalid token: {str(e)}")
 
-    async def refresh_access_token(self, refresh_token: str) -> TokenPair:
+    async def refresh_access_token(self, refresh_token: str, db=None, auth_service=None) -> TokenPair:
         """
         Create new access token using refresh token
 
         Args:
             refresh_token: Valid refresh token
+            db: Database session
+            auth_service: Auth service for getting permissions
 
         Returns:
             New token pair
@@ -273,19 +275,55 @@ class JWTTokenService:
             user_id = UUID(payload["sub"])
             user_type = payload["user_type"]
 
-            # Get user details for new access token
-            # This would typically involve a database lookup
-            # For now, we'll create a basic token
+            # Fetch user details from database to get current role, permissions, etc.
+            email = ""
+            permissions = []
+            firm_id = None
+            role = None
+
+            if db:
+                if user_type == "firm_personnel":
+                    # Query firm personnel to get current data
+                    query = select(FirmPersonnel).where(FirmPersonnel.id == user_id)
+                    result = await db.execute(query)
+                    user = result.scalar_one_or_none()
+                    
+                    if user and user.is_active:
+                        email = user.email
+                        role = user.role
+                        firm_id = user.firm_id
+                        # Get permissions from auth service if available
+                        if auth_service:
+                            permissions = auth_service._get_user_permissions(user_type, role)
+                    else:
+                        raise AuthenticationError("User not found or inactive")
+                        
+                elif user_type == "registered_user":
+                    # Query registered user to get current data
+                    query = select(RegisteredUser).where(RegisteredUser.id == user_id)
+                    result = await db.execute(query)
+                    user = result.scalar_one_or_none()
+                    
+                    if user and not user.is_suspended:
+                        email = user.email
+                        role = user.role
+                        # Get permissions from auth service if available
+                        if auth_service:
+                            permissions = auth_service._get_user_permissions(user_type, role)
+                    else:
+                        raise AuthenticationError("User not found or suspended")
 
             # Revoke old refresh token
             await self.revoke_token(refresh_token)
 
-            # Create new token pair
+            # Create new token pair with current user data
             return self.create_token_pair(
                 user_id=user_id,
                 user_type=user_type,
-                email="",  # Would be fetched from database
-                permissions=[],  # Would be fetched from database
+                email=email,
+                permissions=permissions,
+                firm_id=firm_id,
+                role=role,
             )
 
         except (ValueError, KeyError) as e:
@@ -667,17 +705,18 @@ class AuthService:
             logger.error("detailed_authentication_error", email=email, error=str(e), exc_info=True)
             raise AuthenticationError("Authentication failed")
 
-    async def refresh_token(self, refresh_token: str) -> TokenPair:
+    async def refresh_token(self, refresh_token: str, db=None) -> TokenPair:
         """
         Refresh access token using refresh token
 
         Args:
             refresh_token: Valid refresh token
+            db: Database session
 
         Returns:
             New token pair
         """
-        return await self.jwt_service.refresh_access_token(refresh_token)
+        return await self.jwt_service.refresh_access_token(refresh_token, db, self)
 
     async def revoke_token(self, token: str) -> bool:
         """

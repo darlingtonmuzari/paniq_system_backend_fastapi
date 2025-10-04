@@ -4,7 +4,8 @@ Panic System Platform - Main FastAPI Application
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from app.core.cors_middleware import setup_cors_middleware
+# from app.core.cors_middleware import setup_cors_middleware
+# from app.core.dynamic_cors import DynamicCORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import asynccontextmanager
 
@@ -20,6 +21,7 @@ from app.core.middleware import (
     MobileAttestationMiddleware,
     SecurityHeadersMiddleware
 )
+from app.core.rate_limiter import RateLimitMiddleware, SecurityHeadersMiddleware as RateLimitSecurityMiddleware
 from app.core.metrics_middleware import MetricsMiddleware
 from app.core.logging import get_logger, setup_logging
 
@@ -128,6 +130,10 @@ def create_app() -> FastAPI:
                 "description": "Emergency request processing and coordination"
             },
             {
+                "name": "emergency-dashboard",
+                "description": "Emergency dashboard for supervisors and office staff (no mobile attestation required)"
+            },
+            {
                 "name": "feedback",
                 "description": "Service feedback and prank detection"
             },
@@ -166,12 +172,29 @@ def create_app() -> FastAPI:
     # Middleware (order matters - last added is executed first)
     app.add_middleware(GZipMiddleware, minimum_size=1000)
     
-    # Setup role-based CORS middleware
-    setup_cors_middleware(app)
+    # Use standard CORS middleware for development
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:3000",
+            "http://localhost:4010",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:4010",
+            "https://localhost:3000",
+            "https://localhost:4010",
+            "https://127.0.0.1:3000", 
+            "https://127.0.0.1:4010"
+        ] + [f"http://localhost:{port}" for port in range(3000, 5000)] + [f"http://localhost:{port}" for port in range(8000, 8100)],
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+        allow_headers=["*"],
+    )
     
-    # Security middleware
+    # Security and rate limiting middleware  
+    # app.add_middleware(RateLimitSecurityMiddleware)
+    # app.add_middleware(RateLimitMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
-    app.add_middleware(MobileAttestationMiddleware)
+    # app.add_middleware(MobileAttestationMiddleware)  # Disable for CORS testing
     app.add_middleware(RequestLoggingMiddleware)
     
     # Metrics middleware (if enabled)

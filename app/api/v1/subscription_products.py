@@ -301,59 +301,6 @@ async def get_firm_products(
         )
 
 
-@router.get("/my-products", response_model=ProductListResponse)
-async def get_my_products(
-    include_inactive: bool = False,
-    current_user: UserContext = Depends(require_firm_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Get all products for the current firm admin's firm
-    
-    Returns a list of subscription products created by the current firm admin's
-    security firm. Can optionally include inactive products.
-    """
-    try:
-        subscription_service = SubscriptionService(db)
-        products = await subscription_service.get_firm_products(
-            firm_id=str(current_user.firm_id),
-            include_inactive=include_inactive
-        )
-        
-        # Handle empty results gracefully
-        if not products:
-            return ProductListResponse(
-                products=[],
-                total_count=0
-            )
-        
-        product_responses = []
-        for product in products:
-            product_responses.append(ProductResponse(
-                id=str(product.id),
-                firm_id=str(product.firm_id),
-                name=product.name,
-                description=product.description,
-                max_users=product.max_users,
-                price=float(product.price),
-                credit_cost=product.credit_cost,
-                is_active=product.is_active,
-                created_at=product.created_at.isoformat(),
-                updated_at=product.updated_at.isoformat()
-            ))
-        
-        return ProductListResponse(
-            products=product_responses,
-            total_count=len(product_responses)
-        )
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve firm products"
-        )
-
-
 @router.get("/", response_model=ProductListResponse)
 async def get_active_products(
     db: AsyncSession = Depends(get_db)
@@ -466,9 +413,6 @@ async def update_product(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update subscription product"
         )
-
-
-
 
 
 @router.delete("/{product_id}")

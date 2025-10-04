@@ -1,7 +1,8 @@
 """
 User and group related models
 """
-from sqlalchemy import Column, String, Boolean, Integer, DECIMAL, ForeignKey, Text, DateTime
+from datetime import datetime
+from sqlalchemy import Column, String, Boolean, Integer, DECIMAL, ForeignKey, Text, DateTime, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from geoalchemy2 import Geometry
@@ -30,7 +31,7 @@ class RegisteredUser(BaseModel):
     last_login_attempt = Column(DateTime(timezone=True), nullable=True)
     
     # Relationships
-    groups = relationship("UserGroup", back_populates="user", cascade="all, delete-orphan")
+    group_memberships = relationship("UserGroupMembership", back_populates="user", cascade="all, delete-orphan")
     stored_subscriptions = relationship("StoredSubscription", back_populates="user", cascade="all, delete-orphan")
     fines = relationship("UserFine", back_populates="user", cascade="all, delete-orphan")
     firm_memberships = relationship("FirmUser", back_populates="user", cascade="all, delete-orphan")
@@ -40,7 +41,6 @@ class UserGroup(BaseModel):
     """User group model"""
     __tablename__ = "user_groups"
     
-    user_id = Column(UUID(as_uuid=True), ForeignKey("registered_users.id"), nullable=False)
     name = Column(String(255), nullable=False)
     address = Column(Text, nullable=False)
     location = Column(Geometry("POINT", srid=4326), nullable=False)
@@ -48,7 +48,7 @@ class UserGroup(BaseModel):
     subscription_expires_at = Column(DateTime(timezone=True), nullable=True)
     
     # Relationships
-    user = relationship("RegisteredUser", back_populates="groups")
+    memberships = relationship("UserGroupMembership", back_populates="group", cascade="all, delete-orphan")
     mobile_numbers = relationship("GroupMobileNumber", back_populates="group", cascade="all, delete-orphan")
     panic_requests = relationship("PanicRequest", back_populates="group")
     
@@ -65,6 +65,26 @@ class UserGroup(BaseModel):
         from geoalchemy2.shape import to_shape
         point = to_shape(self.location)
         return point.x
+
+
+class UserGroupMembership(BaseModel):
+    """Junction table for many-to-many relationship between users and groups"""
+    __tablename__ = "user_group_memberships"
+    
+    user_id = Column(UUID(as_uuid=True), ForeignKey("registered_users.id"), nullable=False)
+    group_id = Column(UUID(as_uuid=True), ForeignKey("user_groups.id"), nullable=False)
+    role = Column(String(20), default="member", nullable=False)  # member, admin, owner
+    joined_at = Column(DateTime(timezone=True), default=lambda: datetime.utcnow(), nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    
+    # Relationships
+    user = relationship("RegisteredUser", back_populates="group_memberships")
+    group = relationship("UserGroup", back_populates="memberships")
+    
+    # Composite unique constraint to prevent duplicate memberships
+    __table_args__ = (
+        UniqueConstraint("user_id", "group_id", name="uq_user_group_membership"),
+    )
 
 
 class GroupMobileNumber(BaseModel):

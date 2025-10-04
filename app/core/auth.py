@@ -3,7 +3,7 @@ Authentication dependencies and utilities for FastAPI
 """
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from typing import Optional
+from typing import Optional, Dict, Any, List
 from uuid import UUID
 import structlog
 import secrets
@@ -373,6 +373,44 @@ def require_role(role: str):
     return check_role
 
 
+def require_any_role(roles: List[str]):
+    """
+    Dependency factory to require any of the specified roles
+    
+    Args:
+        roles: List of acceptable role strings
+        
+    Returns:
+        Dependency function that checks if user has any of the roles
+    """
+    async def check_roles(
+        current_user: UserContext = Depends(get_current_user)
+    ) -> UserContext:
+        # Check if user is firm personnel with appropriate role
+        if current_user.is_firm_personnel():
+            if current_user.role in roles:
+                return current_user
+        
+        # Check if user is admin/super_admin (they have access to everything)
+        if current_user.role in ["admin", "super_admin"]:
+            return current_user
+        
+        logger.warning(
+            "role_access_denied",
+            user_id=str(current_user.user_id),
+            required_roles=roles,
+            user_role=current_user.role,
+            user_type=current_user.user_type
+        )
+        
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"One of these roles required: {', '.join(roles)}"
+        )
+    
+    return check_roles
+
+
 # Common permission dependencies
 require_emergency_request = require_permission("emergency:request")
 require_subscription_purchase = require_permission("subscription:purchase")
@@ -384,7 +422,12 @@ require_team_manage = require_permission("team:manage")
 # Common role dependencies
 require_field_agent = require_role("field_agent")
 require_team_leader = require_role("team_leader")
-require_office_staff = require_role("office_staff")
+require_firm_user = require_role("firm_user")
+require_firm_supervisor = require_role("firm_supervisor")
+
+# Emergency providers permissions
+require_emergency_provider_crud = require_any_role(["firm_user", "firm_supervisor", "firm_admin"])
+require_emergency_provider_read = require_any_role(["firm_user", "firm_supervisor", "firm_admin", "team_leader", "field_agent", "admin", "super_admin"])
 
 
 class OptionalAuth:

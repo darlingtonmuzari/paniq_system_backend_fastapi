@@ -34,6 +34,7 @@ class SecurityFirm(BaseModel):
     subscription_products = relationship("SubscriptionProduct", back_populates="firm", cascade="all, delete-orphan")
     applications = relationship("FirmApplication", back_populates="firm", cascade="all, delete-orphan")
     documents = relationship("FirmDocument", back_populates="firm", cascade="all, delete-orphan")
+    emergency_providers = relationship("EmergencyProvider", back_populates="firm", cascade="all, delete-orphan")
 
 
 class CoverageArea(BaseModel):
@@ -59,7 +60,7 @@ class FirmPersonnel(BaseModel):
     phone = Column(String(20), nullable=False)
     first_name = Column(String(100), nullable=False)
     last_name = Column(String(100), nullable=False)
-    role = Column(String(20), nullable=False)  # field_agent, team_leader, office_staff
+    role = Column(String(20), nullable=False)  # field_agent, team_leader, firm_user, firm_supervisor
     team_id = Column(UUID(as_uuid=True), ForeignKey("teams.id"), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
@@ -132,7 +133,7 @@ class FirmUser(BaseModel):
     
     user_id = Column(UUID(as_uuid=True), ForeignKey("registered_users.id"), nullable=False)
     firm_id = Column(UUID(as_uuid=True), ForeignKey("security_firms.id"), nullable=False)
-    role = Column(String(20), nullable=False)  # firm_admin, office_staff, field_staff
+    role = Column(String(20), nullable=False)  # firm_admin, firm_user, firm_supervisor, field_staff
     status = Column(String(20), default="pending", nullable=False)  # pending, active, suspended
     invited_by = Column(UUID(as_uuid=True), nullable=True)  # User ID who sent invitation
     invited_at = Column(DateTime(timezone=True), nullable=True)

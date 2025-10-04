@@ -200,7 +200,7 @@ class UserInvitationRequest(BaseModel):
     
     @validator('user_type')
     def validate_user_type(cls, v):
-        valid_user_types = ['office_staff', 'field_staff']
+        valid_user_types = ['firm_user', 'firm_supervisor', 'field_staff']
         if v not in valid_user_types:
             raise ValueError(f'User type must be one of: {", ".join(valid_user_types)}')
         return v
@@ -222,7 +222,7 @@ class UserInvitationRequest(BaseModel):
         if user_type == 'field_staff':
             if v not in ['firm_field_leader', 'firm_field_security']:
                 raise ValueError('Field staff can only be assigned firm_field_leader or firm_field_security roles')
-        elif user_type == 'office_staff':
+        elif user_type in ['firm_user', 'firm_supervisor']:
             if v not in ['firm_staff', 'firm_supervisor', 'firm_admin', 'super_admin', 'admin']:
                 raise ValueError('Office staff can only be assigned firm_staff, firm_supervisor, firm_admin, super_admin, or admin roles')
         return v

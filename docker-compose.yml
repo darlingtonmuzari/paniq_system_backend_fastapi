@@ -49,8 +49,8 @@ services:
     container_name: panic-system-celery
     command: celery -A app.core.celery worker --loglevel=info --concurrency=4
     environment:
-      # Database and Redis URLs for Docker services
-      - DATABASE_URL=postgresql+asyncpg://postgres:password@postgres:5432/panic_system
+      # Database and Redis URLs for Remote PostgreSQL and Docker Redis
+      - DATABASE_URL=postgresql+asyncpg://manica_dev_admin:M1n931solutions*b0b5@postgresql-184662-0.cloudclusters.net:10024/panic_system_dev
       - REDIS_URL=redis://:redis_password@redis:6379/0
       - DEBUG=true
       - LOG_LEVEL=DEBUG
@@ -79,8 +79,8 @@ services:
     container_name: panic-system-celery-beat
     command: celery -A app.core.celery beat --loglevel=info
     environment:
-      # Database and Redis URLs for Docker services
-      - DATABASE_URL=postgresql+asyncpg://postgres:password@postgres:5432/panic_system
+      # Database and Redis URLs for Remote PostgreSQL and Docker Redis
+      - DATABASE_URL=postgresql+asyncpg://manica_dev_admin:M1n931solutions*b0b5@postgresql-184662-0.cloudclusters.net:10024/panic_system_dev
       - REDIS_URL=redis://:redis_password@redis:6379/0
       - DEBUG=true
       - LOG_LEVEL=DEBUG
